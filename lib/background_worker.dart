@@ -4,6 +4,8 @@ import 'package:http/http.dart' as http;
 import 'package:workmanager/workmanager.dart';
 
 import 'notification_service.dart';
+import 'models/telemetry.dart';
+import 'config.dart';
 
 /// Unique task name registered with WorkManager.
 const kBackgroundTaskName = 'inverterTelemetryCheck';
@@ -56,15 +58,10 @@ Future<void> _checkAndNotify() async {
     if (response.statusCode != 200) return;
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
-    final data = Map<String, dynamic>.from(json['data'] as Map? ?? {});
+    final telemetry = Telemetry.fromJson(json);
 
-    double d(String key) {
-      final v = data[key];
-      return v is num ? v.toDouble() : 0;
-    }
-
-    final batteryVoltage = d('batteryVoltage');
-    final loadPercentage = d('loadPercentage').clamp(0.0, 100.0);
+    final batteryVoltage = telemetry.batteryVoltage;
+    final loadPercentage = telemetry.loadPercentage;
 
     final svc = NotificationService.instance;
     await svc.init();
