@@ -2,7 +2,7 @@
 
 Real-time Flutter dashboard for the ESP32 endpoint:
 
-`http://192.168.31.127/telemetry`
+`http://ESP_IP/telemetry`
 
 ## Run
 
