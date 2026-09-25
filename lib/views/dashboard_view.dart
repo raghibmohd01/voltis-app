@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../viewmodels/dashboard_viewmodel.dart';
 import '../utils/color_helpers.dart';
 import '../utils/formatters.dart';
+import '../notification_service.dart';
+import '../services/hybrid_telemetry_service.dart';
 
 import '../widgets/card_widget.dart';
 import '../widgets/title_widget.dart';
@@ -11,6 +13,8 @@ import '../widgets/info_strip.dart';
 import '../widgets/status_pill.dart';
 import '../widgets/warning_widget.dart';
 import '../widgets/load_progress_bar.dart';
+
+import '../services/ota_service.dart';
 
 class DashboardView extends StatefulWidget {
   const DashboardView({super.key});
@@ -26,6 +30,9 @@ class _DashboardViewState extends State<DashboardView> {
   void initState() {
     super.initState();
     _viewModel = DashboardViewModel();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      OTAService().checkForUpdates(context);
+    });
   }
 
   @override
@@ -35,8 +42,11 @@ class _DashboardViewState extends State<DashboardView> {
   }
 
   double batteryPercent(double voltage) {
+    // Highly accurate 48V Lead-Acid / Tubular curve under typical load
     var points = <double, double>{
-      46: 0, 47: 10, 48: 25, 49: 45, 50: 65, 51: 80, 52: 95, 53: 100,
+      42.0: 0, 44.5: 10, 45.8: 20, 46.8: 30, 47.6: 40,
+      48.2: 50, 48.7: 60, 49.1: 70, 49.6: 80, 50.0: 90, 50.4: 100, 
+      54.0: 100, // Bulk/Float charging
     };
     final keys = points.keys.toList()..sort();
     if (voltage <= keys.first) return 0;
@@ -97,7 +107,7 @@ class _DashboardViewState extends State<DashboardView> {
                             Text('Inverter',
                                 style: TextStyle(
                                     fontSize: 27, fontWeight: FontWeight.w800)),
-                            Text('Live energy dashboard',
+                            Text('Live Dashboard',
                                 style: TextStyle(color: Colors.white54)),
                           ],
                         ),
@@ -111,6 +121,19 @@ class _DashboardViewState extends State<DashboardView> {
                                 child: CircularProgressIndicator(strokeWidth: 2))
                             : const Icon(Icons.refresh_rounded),
                       ),
+                      if (_viewModel.currentDataSource != DataSource.none)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8.0),
+                          child: Icon(
+                            _viewModel.currentDataSource == DataSource.local
+                                ? Icons.wifi
+                                : Icons.cloud,
+                            color: _viewModel.currentDataSource == DataSource.local
+                                ? Colors.green
+                                : Colors.blue,
+                            size: 20,
+                          ),
+                        ),
                       StatusPill(online: online),
                     ],
                   ),
@@ -122,6 +145,7 @@ class _DashboardViewState extends State<DashboardView> {
                   const SizedBox(height: 16),
                   LoadProgressBar(
                     loadPercent: telemetry.loadPercentage,
+                    acOutputVoltage: telemetry.acOutputVoltage,
                     color: loadColor,
                   ),
 
@@ -199,13 +223,108 @@ class _DashboardViewState extends State<DashboardView> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 16),
-                        InfoStrip(
-                          icon: Icons.bolt_rounded,
-                          iconColor: batteryColor,
-                          text: telemetry.batteryVoltage > 0
-                              ? '${formatPower(telemetry.batteryVoltage * telemetry.batteryCurrent.abs())} battery power'
-                              : 'No battery telemetry',
+                        Builder(
+                          builder: (context) {
+                            final double loadWatts = (telemetry.loadPercentage / 100.0) * 5000.0;
+                            double drainWatts = 0;
+                            
+                            if (telemetry.acInputVoltage < 50 && loadWatts > telemetry.pvPower) {
+                              drainWatts = loadWatts - telemetry.pvPower;
+                            }
+                            
+                            // Handle sensor noise (e.g. 0.1A * 48V = 4.8W)
+                            final bool isDraining = drainWatts > 50; 
+                            final bool isCharging = !isDraining && telemetry.batteryVoltage > 0 && telemetry.batteryCurrent.abs() > 0.4;
+
+                            if (isCharging) {
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 16),
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                      color: batteryColor.withOpacity(.1),
+                                      borderRadius: BorderRadius.circular(16)),
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.bolt_rounded, size: 28, color: batteryColor),
+                                      const SizedBox(width: 14),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text('CHARGING POWER',
+                                                style: TextStyle(
+                                                    color: batteryColor.withOpacity(0.8),
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w800)),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                                formatPower(telemetry.batteryVoltage *
+                                                    telemetry.batteryCurrent.abs()),
+                                                style: TextStyle(
+                                                    color: batteryColor,
+                                                    fontSize: 20,
+                                                    fontWeight: FontWeight.w900)),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }
+                            
+                            if (isDraining) {
+                              Color drainColor = Colors.grey;
+                              if (drainWatts >= 3500) {
+                                drainColor = Colors.redAccent;
+                              } else if (drainWatts >= 1500) {
+                                drainColor = Colors.orangeAccent;
+                              } else if (drainWatts >= 500) {
+                                drainColor = Colors.green;
+                              } else {
+                                drainColor = Colors.white54;
+                              }
+
+                              return Padding(
+                                padding: const EdgeInsets.only(top: 16),
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                      color: drainColor.withOpacity(.1),
+                                      borderRadius: BorderRadius.circular(16)),
+                                  child: Row(
+                                    children: [
+                                      Icon(drainWatts >= 3500 ? Icons.warning_amber_rounded : Icons.bolt_rounded, size: 28, color: drainColor),
+                                      const SizedBox(width: 14),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text('EST. BATTERY DRAIN',
+                                                style: TextStyle(
+                                                    color: drainColor.withOpacity(0.8),
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w800)),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                                formatPower(drainWatts),
+                                                style: TextStyle(
+                                                    color: drainColor,
+                                                    fontSize: 20,
+                                                    fontWeight: FontWeight.w900)),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }
+                            return const SizedBox.shrink();
+                          },
                         ),
                       ],
                     ),
@@ -246,19 +365,45 @@ class _DashboardViewState extends State<DashboardView> {
                         ),
                         const SizedBox(height: 18),
                         LinearProgressIndicator(
-                          value: (telemetry.pvPower / 6100).clamp(0, 1),
+                          value: (telemetry.pvPower / 5000).clamp(0, 1),
                           minHeight: 8,
                           borderRadius: BorderRadius.circular(10),
                           backgroundColor: Colors.white10,
                           valueColor: AlwaysStoppedAnimation(solarColor),
                         ),
-                        const SizedBox(height: 7),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: Text('6.1 kW inverter',
-                              style: TextStyle(
-                                  color: solarColor, fontSize: 11)),
-                        ),
+                        
+                        if (telemetry.pvPower > 0) ...[
+                          const SizedBox(height: 18),
+                          Builder(builder: (context) {
+                            final chargingPower = telemetry.batteryVoltage > 0 
+                                ? telemetry.batteryVoltage * telemetry.batteryCurrent.abs() 
+                                : 0.0;
+                            final solarForCharging = (telemetry.pvPower >= chargingPower) ? chargingPower : telemetry.pvPower;
+                            final solarForLoad = (telemetry.pvPower > solarForCharging) ? telemetry.pvPower - solarForCharging : 0.0;
+                            
+                            return Row(
+                              children: [
+                                Expanded(
+                                  child: MiniPanel(
+                                    title: 'TO BATTERY',
+                                    icon: Icons.battery_charging_full_rounded,
+                                    text: formatPower(solarForCharging),
+                                    color: const Color(0xFF55D6BE), // Mint green
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: MiniPanel(
+                                    title: 'TO LOAD',
+                                    icon: Icons.home_rounded,
+                                    text: formatPower(solarForLoad),
+                                    color: const Color(0xFFF1C40F), // Soft yellow/orange
+                                  ),
+                                ),
+                              ],
+                            );
+                          }),
+                        ],
                       ],
                     ),
                   ),

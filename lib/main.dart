@@ -1,22 +1,47 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'notification_service.dart';
 import 'background_worker.dart';
-import 'views/dashboard_view.dart';
+import 'services/hybrid_telemetry_service.dart';
+import 'views/login_screen.dart';
+import 'views/main_scaffold.dart';
+
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // Request notifications first
+  await Permission.notification.request();
+  // Request ignoring battery optimizations so OnePlus doesn't kill the worker
+  await Permission.ignoreBatteryOptimizations.request();
+
   await NotificationService.instance.init();
-  await registerBackgroundWorker();
-  runApp(const InverterDashboardApp());
+  await initializeBackgroundService();
+
+  final user = FirebaseAuth.instance.currentUser;
+  if (user != null) {
+    HybridTelemetryService.instance.start();
+  }
+
+  runApp(InverterDashboardApp(isLoggedIn: user != null));
 }
 
 class InverterDashboardApp extends StatelessWidget {
-  const InverterDashboardApp({super.key});
+  final bool isLoggedIn;
+  
+  const InverterDashboardApp({super.key, this.isLoggedIn = false});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Inverter Dashboard',
+      title: 'Voltis',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -27,7 +52,7 @@ class InverterDashboardApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const DashboardView(),
+      home: isLoggedIn ? const MainScaffold() : const LoginScreen(),
     );
   }
 }

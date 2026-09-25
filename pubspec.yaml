@@ -11,8 +11,19 @@ dependencies:
     sdk: flutter
   http: ^1.5.0
   flutter_local_notifications: ^18.0.0
-  workmanager: ^0.10.0
   shared_preferences: ^2.3.0
+  sqflite: ^2.4.2+1
+  path_provider: ^2.1.6
+  permission_handler: 11.3.1
+  flutter_background_service: ^5.1.0
+  flutter_background_service_android: ^6.3.1
+  firebase_core: ^4.15.0
+  firebase_database: ^12.6.0
+  firebase_auth: ^6.7.0
+  fl_chart: ^1.2.0
+  package_info_plus: ^10.2.1
+  dio: ^5.11.1
+  open_filex: ^4.7.0
 
 dev_dependencies:
   flutter_test:
@@ -24,7 +35,7 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/icon/app_icon.png"
-  adaptive_icon_background: "#080B10"
+  adaptive_icon_background: "#002B4E"
   adaptive_icon_foreground: "assets/icon/app_icon.png"
   min_sdk_size: 21
 

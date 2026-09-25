@@ -1,20 +1,20 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:ui';
 
+import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
-import 'package:workmanager/workmanager.dart';
 
 import 'notification_service.dart';
 import 'models/telemetry.dart';
 import 'config.dart';
 
-/// Unique task name registered with WorkManager.
-const kBackgroundTaskName = 'inverterTelemetryCheck';
-
-/// The endpoint to poll (must match DashboardPage).
 const _endpoint = telemetryEndpoint;
 
-// ── Notification IDs (stable per-threshold so they replace each other) ───
-
+// ── Notification IDs ───
 const _idBattery47 = 100;
 const _idBattery46 = 101;
 const _idBattery45 = 102;
@@ -22,35 +22,82 @@ const _idLoad50 = 200;
 const _idLoad60 = 201;
 const _idLoad80 = 202;
 
-/// Top-level callback required by WorkManager — must be a static or
-/// top-level function.
+Future<void> initializeBackgroundService() async {
+  final service = FlutterBackgroundService();
+
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'my_foreground', // id
+    'Voltis Foreground Service', // title
+    description: 'This channel is used for important notifications.', // description
+    importance: Importance.low, // importance must be at low or higher level
+  );
+
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onStart,
+      autoStart: false,
+      isForegroundMode: true,
+      notificationChannelId: 'my_foreground',
+      initialNotificationTitle: 'Voltis Service',
+      initialNotificationContent: 'Initializing...',
+      foregroundServiceNotificationId: 888,
+    ),
+    iosConfiguration: IosConfiguration(
+      autoStart: false,
+      onForeground: onStart,
+      onBackground: onIosBackground,
+    ),
+  );
+  
+  final prefs = await SharedPreferences.getInstance();
+  final enabled = prefs.getBool('bg_service_enabled') ?? false;
+  if (enabled) {
+    await service.startService();
+  }
+}
+
 @pragma('vm:entry-point')
-void callbackDispatcher() {
-  Workmanager().executeTask((taskName, inputData) async {
-    if (taskName == kBackgroundTaskName ||
-        taskName == Workmanager.iOSBackgroundTask) {
-      await _checkAndNotify();
-    }
-    return true;
+Future<bool> onIosBackground(ServiceInstance service) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
+  return true;
+}
+
+@pragma('vm:entry-point')
+void onStart(ServiceInstance service) async {
+  // Only available for flutter 3.0.0 and later
+  DartPluginRegistrant.ensureInitialized();
+  
+  if (service is AndroidServiceInstance) {
+    service.on('setAsForeground').listen((event) {
+      service.setAsForegroundService();
+    });
+    service.on('setAsBackground').listen((event) {
+      service.setAsBackgroundService();
+    });
+  }
+  service.on('stopService').listen((event) {
+    service.stopSelf();
+  });
+
+  // Bring in notification service
+  await NotificationService.instance.init(requestPermissions: false);
+
+  // Polling loop (every 15 seconds)
+  Timer.periodic(const Duration(seconds: 15), (timer) async {
+    await _checkAndNotify(service);
   });
 }
 
-/// Register the periodic background task. Call once at app start.
-Future<void> registerBackgroundWorker() async {
-  await Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
-
-  await Workmanager().registerPeriodicTask(
-    'inverter-bg-check',
-    kBackgroundTaskName,
-    frequency: const Duration(minutes: 15),
-    constraints: Constraints(networkType: NetworkType.connected),
-    existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
-  );
-}
-
-// ── Core check logic (runs in isolate / background) ─────────────────────
-
-Future<void> _checkAndNotify() async {
+Future<void> _checkAndNotify(ServiceInstance service) async {
   try {
     final response = await http
         .get(Uri.parse(_endpoint))
@@ -63,24 +110,30 @@ Future<void> _checkAndNotify() async {
     final batteryVoltage = telemetry.batteryVoltage;
     final loadPercentage = telemetry.loadPercentage;
 
+    // Update foreground notification safely
+    if (service is AndroidServiceInstance) {
+      if (await service.isForegroundService()) {
+        service.setForegroundNotificationInfo(
+          title: "Voltis is Monitoring",
+          content: "Battery: ${batteryVoltage.toStringAsFixed(1)}V | Load: ${loadPercentage.toStringAsFixed(0)}%",
+        );
+      }
+    }
+
     final svc = NotificationService.instance;
-    await svc.init();
 
     // ── Battery thresholds ───────────────────────────────────────────
-
-    if (batteryVoltage > 0 && batteryVoltage <= 45) {
+    if (batteryVoltage > 0 && batteryVoltage <= 45.0) {
       if (await NotificationService.shouldNotify('bat45')) {
         await svc.show(
           id: _idBattery45,
           title: '🚨 CRITICAL: Battery at ${batteryVoltage.toStringAsFixed(1)}V',
-          body:
-              'Battery voltage has dropped to a critical level. Reduce load immediately!',
+          body: 'Battery voltage has dropped to a critical level. Reduce load immediately!',
           critical: true,
         );
         await NotificationService.markSent('bat45');
       }
-    } else if (batteryVoltage > 45 && batteryVoltage <= 46) {
-      await NotificationService.clearFlag('bat45');
+    } else if (batteryVoltage > 45.0 && batteryVoltage <= 46.0) {
       if (await NotificationService.shouldNotify('bat46')) {
         await svc.show(
           id: _idBattery46,
@@ -90,9 +143,7 @@ Future<void> _checkAndNotify() async {
         );
         await NotificationService.markSent('bat46');
       }
-    } else if (batteryVoltage > 46 && batteryVoltage <= 47) {
-      await NotificationService.clearFlag('bat45');
-      await NotificationService.clearFlag('bat46');
+    } else if (batteryVoltage > 46.0 && batteryVoltage <= 47.0) {
       if (await NotificationService.shouldNotify('bat47')) {
         await svc.show(
           id: _idBattery47,
@@ -101,15 +152,20 @@ Future<void> _checkAndNotify() async {
         );
         await NotificationService.markSent('bat47');
       }
-    } else {
-      // Recovered — clear all battery flags
+    }
+
+    // Hysteresis for Battery: Clear flags when voltage safely Recovers
+    if (batteryVoltage >= 46.0) {
       await NotificationService.clearFlag('bat45');
+    }
+    if (batteryVoltage >= 47.0) {
       await NotificationService.clearFlag('bat46');
+    }
+    if (batteryVoltage >= 48.0) { // Safely recovered
       await NotificationService.clearFlag('bat47');
     }
 
     // ── Load thresholds ──────────────────────────────────────────────
-
     if (loadPercentage >= 80) {
       if (await NotificationService.shouldNotify('load80')) {
         await svc.show(
@@ -121,7 +177,6 @@ Future<void> _checkAndNotify() async {
         await NotificationService.markSent('load80');
       }
     } else if (loadPercentage >= 60) {
-      await NotificationService.clearFlag('load80');
       if (await NotificationService.shouldNotify('load60')) {
         await svc.show(
           id: _idLoad60,
@@ -131,8 +186,6 @@ Future<void> _checkAndNotify() async {
         await NotificationService.markSent('load60');
       }
     } else if (loadPercentage >= 50) {
-      await NotificationService.clearFlag('load80');
-      await NotificationService.clearFlag('load60');
       if (await NotificationService.shouldNotify('load50')) {
         await svc.show(
           id: _idLoad50,
@@ -141,11 +194,17 @@ Future<void> _checkAndNotify() async {
         );
         await NotificationService.markSent('load50');
       }
-    } else {
-      // Recovered — clear all load flags
-      await NotificationService.clearFlag('load50');
-      await NotificationService.clearFlag('load60');
+    }
+
+    // Hysteresis for Load
+    if (loadPercentage < 75) {
       await NotificationService.clearFlag('load80');
+    }
+    if (loadPercentage < 55) {
+      await NotificationService.clearFlag('load60');
+    }
+    if (loadPercentage < 45) {
+      await NotificationService.clearFlag('load50');
     }
   } catch (_) {
     // Network unavailable — silently skip this cycle.

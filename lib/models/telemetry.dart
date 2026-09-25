@@ -50,7 +50,7 @@ class Telemetry {
       acInputFrequency: d('acInputFrequency'),
       acOutputVoltage: d('acOutputVoltage'),
       acOutputFrequency: d('acOutputFrequency'),
-      loadPercentage: d('loadPercentage').clamp(0, 100),
+      loadPercentage: d('loadPercentage'), // Unclamped to allow 110% - 150% overloads
       pvEnergy: d('pvEnergy'),
       lastUpdateMs: i('lastUpdateMs'),
     );
