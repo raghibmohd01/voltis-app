@@ -36,7 +36,7 @@ class NotificationService {
 
   // ── Initialisation ─────────────────────────────────────────────────────
 
-  Future<void> init() async {
+  Future<void> init({bool requestPermissions = true}) async {
     if (_initialised) return;
 
     const androidSettings =
@@ -54,11 +54,15 @@ class NotificationService {
       ),
     );
 
-    // Request permission on Android 13+
-    if (Platform.isAndroid) {
+    // Request permission on Android 13+ only if requested (don't do this in background isolate!)
+    if (requestPermissions && Platform.isAndroid) {
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
-      await android?.requestNotificationsPermission();
+      try {
+        await android?.requestNotificationsPermission();
+      } catch (_) {
+        // Ignore if called from background without an activity
+      }
     }
 
     _initialised = true;

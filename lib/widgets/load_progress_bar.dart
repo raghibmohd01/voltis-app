@@ -4,16 +4,22 @@ import 'status_chip.dart';
 
 class LoadProgressBar extends StatelessWidget {
   final double loadPercent;
+  final double acOutputVoltage;
   final Color color;
   
   const LoadProgressBar({
     super.key, 
     required this.loadPercent, 
+    required this.acOutputVoltage,
     required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Estimate watts and amps based on 5000W inverter capacity
+    final double estimatedWatts = (loadPercent / 100.0) * 5000.0;
+    final double estimatedAmps = acOutputVoltage > 0 ? (estimatedWatts / acOutputVoltage) : 0.0;
+
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -70,6 +76,31 @@ class LoadProgressBar extends StatelessWidget {
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
                         color: color.withOpacity(0.7))),
+              ),
+              const Spacer(),
+              // Additional Metrics (Watts and Amps)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '${estimatedWatts.toStringAsFixed(0)} W',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white70,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${estimatedAmps.toStringAsFixed(1)} A',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white54,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                ],
               ),
             ],
           ),
