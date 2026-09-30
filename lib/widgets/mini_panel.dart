@@ -12,7 +12,7 @@ class MiniPanel extends StatelessWidget {
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.all(13),
         decoration: BoxDecoration(
-            color: color != null ? color!.withOpacity(.1) : Colors.white.withOpacity(.035),
+            color: color != null ? color!.withOpacity(.1) : Colors.black.withOpacity(.3),
             borderRadius: BorderRadius.circular(16)),
         child: Row(
           children: [

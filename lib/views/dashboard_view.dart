@@ -13,6 +13,12 @@ import '../widgets/info_strip.dart';
 import '../widgets/status_pill.dart';
 import '../widgets/warning_widget.dart';
 import '../widgets/load_progress_bar.dart';
+import '../widgets/battery_duration_tile.dart';
+import '../widgets/charging_power_tile.dart';
+import '../widgets/battery_drain_tile.dart';
+import '../widgets/animated_battery_ring.dart';
+import '../widgets/animated_solar_bar.dart';
+import '../widgets/solar_power_flow_tile.dart';
 
 import '../services/ota_service.dart';
 
@@ -77,14 +83,20 @@ class _DashboardViewState extends State<DashboardView> {
             final soc = batteryPercent(telemetry.batteryVoltage);
             final loadColor = getLoadColor(telemetry.loadPercentage);
             final batteryColor = getBatteryColor(telemetry.batteryVoltage);
-            final solarColor = getSolarColor(telemetry.pvPower);
+            
+            // Determine if PV is artificially capped because battery is full and load is low
+            final bool isBatteryFull = telemetry.batteryVoltage >= 53.0 || soc >= 98.0;
+            final bool isLoadLow = telemetry.loadPercentage < 20.0;
+            final bool isCapped = isBatteryFull && isLoadLow && telemetry.pvVoltage > 50.0;
+            
+            final solarColor = getSolarColor(telemetry.pvPower, isCapped: isCapped);
 
             return RefreshIndicator(
               onRefresh: () async {
                 // Ignore since ViewModel auto polls, or could expose manual refresh
               },
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
+                padding: const EdgeInsets.fromLTRB(16, 20, 16, 120),
                 children: [
                   Row(
                     children: [
@@ -170,34 +182,9 @@ class _DashboardViewState extends State<DashboardView> {
                             SizedBox(
                               width: 110,
                               height: 110,
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  SizedBox(
-                                    width: 80,
-                                    height: 80,
-                                    child: CircularProgressIndicator(
-                                      value: soc / 100,
-                                      strokeWidth: 9,
-                                      backgroundColor: Colors.white10,
-                                      valueColor:
-                                          AlwaysStoppedAnimation(batteryColor),
-                                    ),
-                                  ),
-                                  Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text('${soc.round()}%',
-                                          style: TextStyle(
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w800,
-                                              color: batteryColor)),
-                                      const Text('estimated',
-                                          style: TextStyle(
-                                              fontSize: 9, color: Colors.white38)),
-                                    ],
-                                  ),
-                                ],
+                              child: AnimatedBatteryRing(
+                                soc: soc,
+                                color: batteryColor,
                               ),
                             ),
                             const SizedBox(width: 20),
@@ -232,98 +219,56 @@ class _DashboardViewState extends State<DashboardView> {
                               drainWatts = loadWatts - telemetry.pvPower;
                             }
                             
-                            // Handle sensor noise (e.g. 0.1A * 48V = 4.8W)
-                            final bool isDraining = drainWatts > 50; 
-                            final bool isCharging = !isDraining && telemetry.batteryVoltage > 0 && telemetry.batteryCurrent.abs() > 0.4;
+                            // Handle sensor noise and Float Charging
+                            // A fully charged battery might sit on a 'float' charge pulling ~1A (approx 50W)
+                            final bool isDraining = drainWatts > 80; 
+                            final double chargingAmps = telemetry.batteryCurrent.abs();
+                            final bool isCharging = !isDraining && telemetry.batteryVoltage > 0 && chargingAmps > 1.2;
+                            final bool isStandby = !isDraining && !isCharging;
 
-                            if (isCharging) {
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 16),
-                                child: Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                      color: batteryColor.withOpacity(.1),
-                                      borderRadius: BorderRadius.circular(16)),
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.bolt_rounded, size: 28, color: batteryColor),
-                                      const SizedBox(width: 14),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text('CHARGING POWER',
-                                                style: TextStyle(
-                                                    color: batteryColor.withOpacity(0.8),
-                                                    fontSize: 10,
-                                                    fontWeight: FontWeight.w800)),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                                formatPower(telemetry.batteryVoltage *
-                                                    telemetry.batteryCurrent.abs()),
-                                                style: TextStyle(
-                                                    color: batteryColor,
-                                                    fontSize: 20,
-                                                    fontWeight: FontWeight.w900)),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
+                            return Column(
+                              children: [
+                                if (isCharging)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 16),
+                                    child: ChargingPowerTile(
+                                      chargingPower: telemetry.batteryVoltage * chargingAmps,
+                                      batteryColor: batteryColor,
+                                    ),
+                                  ),
+
+                                if (isDraining)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 16),
+                                    child: BatteryDrainTile(
+                                      drainWatts: drainWatts,
+                                    ),
+                                  ),
+                                  
+                                if (isStandby)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 16),
+                                    child: InfoStrip(
+                                      icon: Icons.battery_saver_rounded,
+                                      text: 'Battery on float charge (Standby)',
+                                      iconColor: Colors.white54,
+                                    ),
+                                  ),
+
+                                // Battery Duration Estimation Tile
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 12),
+                                  child: BatteryDurationTile(
+                                    batteryVoltage: telemetry.batteryVoltage,
+                                    batteryCurrent: telemetry.batteryCurrent,
+                                    loadPercentage: telemetry.loadPercentage,
+                                    pvPower: telemetry.pvPower,
+                                    acInputVoltage: telemetry.acInputVoltage,
+                                    soc: soc,
                                   ),
                                 ),
-                              );
-                            }
-                            
-                            if (isDraining) {
-                              Color drainColor = Colors.grey;
-                              if (drainWatts >= 3500) {
-                                drainColor = Colors.redAccent;
-                              } else if (drainWatts >= 1500) {
-                                drainColor = Colors.orangeAccent;
-                              } else if (drainWatts >= 500) {
-                                drainColor = Colors.green;
-                              } else {
-                                drainColor = Colors.white54;
-                              }
-
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 16),
-                                child: Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                      color: drainColor.withOpacity(.1),
-                                      borderRadius: BorderRadius.circular(16)),
-                                  child: Row(
-                                    children: [
-                                      Icon(drainWatts >= 3500 ? Icons.warning_amber_rounded : Icons.bolt_rounded, size: 28, color: drainColor),
-                                      const SizedBox(width: 14),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text('EST. BATTERY DRAIN',
-                                                style: TextStyle(
-                                                    color: drainColor.withOpacity(0.8),
-                                                    fontSize: 10,
-                                                    fontWeight: FontWeight.w800)),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                                formatPower(drainWatts),
-                                                style: TextStyle(
-                                                    color: drainColor,
-                                                    fontSize: 20,
-                                                    fontWeight: FontWeight.w900)),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            }
-                            return const SizedBox.shrink();
+                              ],
+                            );
                           },
                         ),
                       ],
@@ -338,72 +283,54 @@ class _DashboardViewState extends State<DashboardView> {
                         CustomTitle(
                           icon: Icons.wb_sunny_rounded,
                           title: 'Solar',
-                          subtitle: telemetry.pvPower > 0
-                              ? 'PV input • ${getSolarLabel(telemetry.pvPower)}'
+                          subtitle: telemetry.pvPower > 0 || isCapped
+                              ? 'PV input • ${getSolarLabel(telemetry.pvPower, isCapped: isCapped)}'
                               : 'PV input',
-                          subtitleColor: telemetry.pvPower > 0
+                          subtitleColor: telemetry.pvPower > 0 || isCapped
                               ? solarColor
                               : null,
                         ),
                         const SizedBox(height: 20),
+                        Builder(builder: (context) {
+                          final chargingPower = telemetry.batteryVoltage > 0
+                              ? telemetry.batteryVoltage *
+                                  telemetry.batteryCurrent.abs()
+                              : 0.0;
+                          final solarForCharging =
+                              (telemetry.pvPower >= chargingPower)
+                                  ? chargingPower
+                                  : telemetry.pvPower;
+                          final solarForLoad = (telemetry.pvPower > solarForCharging)
+                              ? telemetry.pvPower - solarForCharging
+                              : 0.0;
+                              
+                          return SolarPowerFlowTile(
+                            pvPower: telemetry.pvPower,
+                            toBatteryPower: solarForCharging,
+                            toLoadPower: solarForLoad,
+                            color: solarColor,
+                          );
+                        }),
+                        const SizedBox(height: 14),
                         Row(
                           children: [
                             Expanded(
-                                child: Metric('PV VOLTAGE',
-                                    telemetry.pvVoltage.toStringAsFixed(0), 'V')),
+                              child: MiniPanel(
+                                title: 'PV VOLTAGE',
+                                icon: Icons.solar_power_rounded,
+                                text: '${telemetry.pvVoltage.toStringAsFixed(1)} V',
+                              ),
+                            ),
+                            const SizedBox(width: 10),
                             Expanded(
-                                child: Metric('PV CURRENT',
-                                    telemetry.pvCurrent.toStringAsFixed(1), 'A')),
-                            Expanded(
-                                child: Metric(
-                              'POWER',
-                              formatPower(telemetry.pvPower),
-                              '',
-                              valueColor: solarColor,
-                            )),
+                              child: MiniPanel(
+                                title: 'PV CURRENT',
+                                icon: Icons.electric_bolt_rounded,
+                                text: '${telemetry.pvCurrent.toStringAsFixed(1)} A',
+                              ),
+                            ),
                           ],
                         ),
-                        const SizedBox(height: 18),
-                        LinearProgressIndicator(
-                          value: (telemetry.pvPower / 5000).clamp(0, 1),
-                          minHeight: 8,
-                          borderRadius: BorderRadius.circular(10),
-                          backgroundColor: Colors.white10,
-                          valueColor: AlwaysStoppedAnimation(solarColor),
-                        ),
-                        
-                        if (telemetry.pvPower > 0) ...[
-                          const SizedBox(height: 18),
-                          Builder(builder: (context) {
-                            final chargingPower = telemetry.batteryVoltage > 0 
-                                ? telemetry.batteryVoltage * telemetry.batteryCurrent.abs() 
-                                : 0.0;
-                            final solarForCharging = (telemetry.pvPower >= chargingPower) ? chargingPower : telemetry.pvPower;
-                            final solarForLoad = (telemetry.pvPower > solarForCharging) ? telemetry.pvPower - solarForCharging : 0.0;
-                            
-                            return Row(
-                              children: [
-                                Expanded(
-                                  child: MiniPanel(
-                                    title: 'TO BATTERY',
-                                    icon: Icons.battery_charging_full_rounded,
-                                    text: formatPower(solarForCharging),
-                                    color: const Color(0xFF55D6BE), // Mint green
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: MiniPanel(
-                                    title: 'TO LOAD',
-                                    icon: Icons.home_rounded,
-                                    text: formatPower(solarForLoad),
-                                    color: const Color(0xFFF1C40F), // Soft yellow/orange
-                                  ),
-                                ),
-                              ],
-                            );
-                          }),
-                        ],
                       ],
                     ),
                   ),

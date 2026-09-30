@@ -30,18 +30,20 @@ String getBatteryLabel(double voltage) {
   return 'Critical';
 }
 
-Color getSolarColor(double watts) {
+Color getSolarColor(double watts, {bool isCapped = false}) {
   if (watts >= 3000) return const Color(0xFF1B8A2A); // dark green – excellent
   if (watts >= 1500) return const Color(0xFF2ECC71); // green – good
   if (watts >= 500) return const Color(0xFFF39C12); // amber – moderate
+  if (isCapped && watts > 10 && watts < 500) return const Color(0xFF3498DB); // Blue - capped/standby
   if (watts >= 1) return const Color(0xFFE74C3C); // red – poor
   return const Color(0xFF888888); // grey – none
 }
 
-String getSolarLabel(double watts) {
+String getSolarLabel(double watts, {bool isCapped = false}) {
   if (watts >= 3000) return 'Excellent';
   if (watts >= 1500) return 'Good';
   if (watts >= 500) return 'Moderate';
+  if (isCapped && watts > 10 && watts < 500) return 'Standby (Capped)';
   if (watts >= 1) return 'Poor';
   return 'None';
 }
