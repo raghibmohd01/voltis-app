@@ -1,7 +1,7 @@
 name: inverter_dashboard
 description: Real-time Flutter dashboard for an ESP32 solar inverter telemetry monitor.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
