@@ -3,12 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import '../models/telemetry.dart';
+import '../models/alert_event.dart';
 import '../services/hybrid_telemetry_service.dart';
 import '../services/database_service.dart';
+import '../services/alert_service.dart';
 
 class DashboardViewModel extends ChangeNotifier {
   StreamSubscription? _subscription;
   StreamSubscription? _dataSourceSubscription;
+  StreamSubscription? _alertSubscription;
 
   Telemetry _telemetry = Telemetry.empty;
   bool _loading = true;
@@ -16,20 +19,32 @@ class DashboardViewModel extends ChangeNotifier {
   DateTime _lastDbInsert = DateTime.fromMillisecondsSinceEpoch(0);
   bool _bgServiceEnabled = false;
   DataSource _currentDataSource = DataSource.none;
+  List<AlertEvent> _activeAlerts = [];
 
   Telemetry get telemetry => _telemetry;
   bool get loading => _loading;
   String? get error => _error;
   bool get bgServiceEnabled => _bgServiceEnabled;
   DataSource get currentDataSource => _currentDataSource;
+  List<AlertEvent> get activeAlerts => _activeAlerts;
 
   DashboardViewModel() {
     _initPrefs();
+
+    // Listen for alert changes
+    _alertSubscription = AlertService.instance.activeAlertStream.listen((alerts) {
+      _activeAlerts = alerts;
+      notifyListeners();
+    });
+
     _subscription = HybridTelemetryService.instance.telemetryStream.listen((newTelemetry) {
       _telemetry = newTelemetry;
       _error = null;
       if (_loading) _loading = false;
       notifyListeners();
+
+      // Evaluate alerts against realtime data
+      AlertService.instance.evaluate(newTelemetry);
 
       // Save to local DB every 1 minute
       if (DateTime.now().difference(_lastDbInsert) > const Duration(minutes: 1)) {
@@ -72,6 +87,8 @@ class DashboardViewModel extends ChangeNotifier {
   void dispose() {
     _subscription?.cancel();
     _dataSourceSubscription?.cancel();
+    _alertSubscription?.cancel();
     super.dispose();
   }
 }
+

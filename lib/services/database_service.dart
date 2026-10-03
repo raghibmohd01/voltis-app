@@ -4,6 +4,7 @@ import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/telemetry.dart';
+import '../models/alert_event.dart';
 
 class DatabaseService {
   DatabaseService._();
@@ -23,8 +24,9 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onUpgrade: _upgradeDB,
     );
   }
 
@@ -37,6 +39,28 @@ class DatabaseService {
         loadPercentage REAL NOT NULL,
         pvPower REAL NOT NULL,
         pvEnergy REAL NOT NULL
+      )
+    ''');
+    await _createAlertsTable(db);
+  }
+
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await _createAlertsTable(db);
+    }
+  }
+
+  Future<void> _createAlertsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        severity INTEGER NOT NULL,
+        type INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        value REAL NOT NULL,
+        timestamp INTEGER NOT NULL,
+        isActive INTEGER NOT NULL DEFAULT 1
       )
     ''');
   }
@@ -141,5 +165,33 @@ class DatabaseService {
     ''', [startOfDay]);
 
     return result;
+  }
+
+  // ── Alert history ──────────────────────────────────────────────────
+
+  Future<void> insertAlert(AlertEvent alert) async {
+    final db = await database;
+    await db.insert('alerts', alert.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+
+    // Auto-cleanup: keep last 30 days
+    final thirtyDaysAgo =
+        DateTime.now().subtract(const Duration(days: 30)).millisecondsSinceEpoch;
+    await db.delete('alerts', where: 'timestamp < ?', whereArgs: [thirtyDaysAgo]);
+  }
+
+  Future<List<AlertEvent>> getAlertHistory() async {
+    final db = await database;
+    final result = await db.query(
+      'alerts',
+      orderBy: 'timestamp DESC',
+      limit: 200,
+    );
+    return result.map((row) => AlertEvent.fromMap(row)).toList();
+  }
+
+  Future<void> clearAlertHistory() async {
+    final db = await database;
+    await db.delete('alerts');
   }
 }

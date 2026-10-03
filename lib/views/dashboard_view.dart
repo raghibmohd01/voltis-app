@@ -19,6 +19,7 @@ import '../widgets/battery_drain_tile.dart';
 import '../widgets/animated_battery_ring.dart';
 import '../widgets/animated_solar_bar.dart';
 import '../widgets/solar_power_flow_tile.dart';
+import '../widgets/critical_alert_card.dart';
 
 import '../services/ota_service.dart';
 
@@ -155,6 +156,11 @@ class _DashboardViewState extends State<DashboardView> {
                   ],
 
                   const SizedBox(height: 16),
+
+                  // ── Critical Alert Banner ──────────────────────────
+                  if (_viewModel.activeAlerts.isNotEmpty)
+                    CriticalAlertCard(alerts: _viewModel.activeAlerts),
+
                   LoadProgressBar(
                     loadPercent: telemetry.loadPercentage,
                     acOutputVoltage: telemetry.acOutputVoltage,
@@ -223,7 +229,9 @@ class _DashboardViewState extends State<DashboardView> {
                             // A fully charged battery might sit on a 'float' charge pulling ~1A (approx 50W)
                             final bool isDraining = drainWatts > 80; 
                             final double chargingAmps = telemetry.batteryCurrent.abs();
-                            final bool isCharging = !isDraining && telemetry.batteryVoltage > 0 && chargingAmps > 1.2;
+                            // Inverter keeps maintaining float charge, often fluctuating between 1A and 1.8A.
+                            // We set the threshold to > 2.0A to be considered active bulk/absorption charging.
+                            final bool isCharging = !isDraining && telemetry.batteryVoltage > 0 && chargingAmps > 2.0;
                             final bool isStandby = !isDraining && !isCharging;
 
                             return Column(
