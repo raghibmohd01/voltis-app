@@ -76,6 +76,8 @@ void onStart(ServiceInstance service) async {
   // Only available for flutter 3.0.0 and later
   DartPluginRegistrant.ensureInitialized();
   
+  Timer? timer;
+
   if (service is AndroidServiceInstance) {
     service.on('setAsForeground').listen((event) {
       service.setAsForegroundService();
@@ -85,6 +87,7 @@ void onStart(ServiceInstance service) async {
     });
   }
   service.on('stopService').listen((event) {
+    timer?.cancel();
     service.stopSelf();
   });
 
@@ -92,7 +95,7 @@ void onStart(ServiceInstance service) async {
   await NotificationService.instance.init(requestPermissions: false);
 
   // Polling loop (every 15 seconds)
-  Timer.periodic(const Duration(seconds: 15), (timer) async {
+  timer = Timer.periodic(const Duration(seconds: 15), (t) async {
     await _checkAndNotify(service);
   });
 }
@@ -119,6 +122,11 @@ Future<void> _checkAndNotify(ServiceInstance service) async {
         );
       }
     }
+
+    final prefs = await SharedPreferences.getInstance();
+    final notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+    
+    if (!notificationsEnabled) return;
 
     final svc = NotificationService.instance;
 

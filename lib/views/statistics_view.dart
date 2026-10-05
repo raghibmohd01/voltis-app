@@ -24,36 +24,12 @@ class _StatisticsViewState extends State<StatisticsView> {
   List<Map<String, dynamic>> _last7DaysData = [];
   List<Map<String, dynamic>> _last30DaysData = [];
   bool _loading = true;
-  bool _bgServiceEnabled = false;
   int _selectedDay = DateTime.now().day;
 
   @override
   void initState() {
     super.initState();
-    _initPrefs();
     _loadStats();
-  }
-
-  Future<void> _initPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _bgServiceEnabled = prefs.getBool('bg_service_enabled') ?? false;
-    });
-  }
-
-  Future<void> _toggleBgService(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('bg_service_enabled', value);
-    setState(() {
-      _bgServiceEnabled = value;
-    });
-
-    final service = FlutterBackgroundService();
-    if (value) {
-      await service.startService();
-    } else {
-      service.invoke("stopService");
-    }
   }
 
   Future<void> _loadStats() async {
@@ -455,25 +431,6 @@ class _StatisticsViewState extends State<StatisticsView> {
                   ),
                 ),
 
-                const SizedBox(height: 24),
-
-
-                const SizedBox(height: 24),
-                
-                // Section: SETTINGS
-                const Padding(
-                  padding: EdgeInsets.only(left: 8.0, bottom: 8.0),
-                  child: Text('SETTINGS', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-                ),
-                CustomCard(
-                  child: SwitchListTile(
-                    title: const Text('Background Alerts', style: TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: const Text('Poll inverter in background to provide instant overload notifications. Only works on local Wi-Fi, not via Firebase.', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                    value: _bgServiceEnabled,
-                    activeColor: const Color(0xFF55D6BE),
-                    onChanged: (val) => _toggleBgService(val),
-                  ),
-                ),
                   ],
                 ),
               ),
