@@ -21,10 +21,12 @@ class _ChargingPowerTileState extends State<ChargingPowerTile>
   late AnimationController _flowController;
   late AnimationController _pulseController;
   late AnimationController _waveController;
+  late int _randomSeed;
 
   @override
   void initState() {
     super.initState();
+    _randomSeed = math.Random().nextInt(10000);
 
     // Particles flowing left to right
     _flowController = AnimationController(
@@ -86,6 +88,7 @@ class _ChargingPowerTileState extends State<ChargingPowerTile>
                   painter: _FlowParticlesPainter(
                     progress: _flowController.value,
                     color: widget.batteryColor,
+                    seed: _randomSeed,
                   ),
                 ),
 
@@ -193,21 +196,21 @@ class _EnergyWavePainter extends CustomPainter {
   bool shouldRepaint(covariant _EnergyWavePainter oldDelegate) => true;
 }
 
-/// Draws glowing particles flowing from bottom to top (energy rising)
 class _FlowParticlesPainter extends CustomPainter {
   final double progress;
   final Color color;
+  final int seed;
 
-  _FlowParticlesPainter({required this.progress, required this.color});
+  _FlowParticlesPainter({required this.progress, required this.color, required this.seed});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final random = math.Random(42); // Fixed seed for consistent particle positions
+    final random = math.Random(seed); // Fixed seed for consistent particle positions
 
-    // Generate 8 particles on 3 vertical lanes
-    for (int i = 0; i < 8; i++) {
-      final lane = i % 3;
-      final laneX = size.width * (0.25 + lane * 0.25);
+    // Generate 15 particles scattered randomly
+    for (int i = 0; i < 15; i++) {
+      // Completely random X position (keeping them slightly away from edges)
+      final startX = size.width * (0.05 + random.nextDouble() * 0.90);
 
       // Each particle has a different phase offset
       final phaseOffset = random.nextDouble();
@@ -217,9 +220,9 @@ class _FlowParticlesPainter extends CustomPainter {
       // Y position: flows from bottom to top
       final y = size.height * (1.0 - particleProgress) + 10 - 10 * particleProgress;
 
-      // Slight horizontal wobble
-      final wobble = math.sin(particleProgress * math.pi * 4 + i) * 4;
-      final x = laneX + wobble;
+      // Slight horizontal wobble to make the path look more natural
+      final wobble = math.sin(particleProgress * math.pi * 6 + i * 2) * 8;
+      final x = startX + wobble;
 
       // Fade in at bottom, full in middle, fade out at top
       final fadeIn = (particleProgress * 3).clamp(0.0, 1.0);

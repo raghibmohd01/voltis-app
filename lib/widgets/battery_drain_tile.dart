@@ -18,10 +18,12 @@ class BatteryDrainTile extends StatefulWidget {
 class _BatteryDrainTileState extends State<BatteryDrainTile>
     with SingleTickerProviderStateMixin {
   late AnimationController _flowController;
+  late int _randomSeed;
 
   @override
   void initState() {
     super.initState();
+    _randomSeed = math.Random().nextInt(10000);
     _flowController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 4000),
@@ -75,6 +77,7 @@ class _BatteryDrainTileState extends State<BatteryDrainTile>
                     painter: _DrainParticlesPainter(
                       progress: _flowController.value,
                       color: color,
+                      seed: _randomSeed,
                     ),
                   ),
                 ),
@@ -178,20 +181,21 @@ class _DrainWavePainter extends CustomPainter {
   bool shouldRepaint(covariant _DrainWavePainter oldDelegate) => true;
 }
 
-/// Draws glowing particles flowing from top to bottom (energy draining)
 class _DrainParticlesPainter extends CustomPainter {
   final double progress;
   final Color color;
+  final int seed;
 
-  _DrainParticlesPainter({required this.progress, required this.color});
+  _DrainParticlesPainter({required this.progress, required this.color, required this.seed});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final random = math.Random(42);
+    final random = math.Random(seed);
 
-    for (int i = 0; i < 8; i++) {
-      final lane = i % 3;
-      final laneX = size.width * (0.25 + lane * 0.25);
+    // Generate 15 particles scattered randomly
+    for (int i = 0; i < 15; i++) {
+      // Completely random X position (keeping them slightly away from edges)
+      final startX = size.width * (0.05 + random.nextDouble() * 0.90);
 
       final phaseOffset = random.nextDouble();
       final speed = 0.6 + random.nextDouble() * 0.4;
@@ -200,8 +204,9 @@ class _DrainParticlesPainter extends CustomPainter {
       // Y position: flows from top to bottom (draining)
       final y = size.height * particleProgress - 10;
 
-      final wobble = math.sin(particleProgress * math.pi * 4 + i) * 4;
-      final x = laneX + wobble;
+      // Slight horizontal wobble to make the path look more natural
+      final wobble = math.sin(particleProgress * math.pi * 6 + i * 2) * 8;
+      final x = startX + wobble;
 
       final fadeIn = (particleProgress * 3).clamp(0.0, 1.0);
       final fadeOut = ((1.0 - particleProgress) * 3).clamp(0.0, 1.0);
