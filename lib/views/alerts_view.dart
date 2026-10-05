@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/alert_event.dart';
 import '../services/database_service.dart';
 import '../services/hybrid_telemetry_service.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 
 /// Full-page view of alert history — grouped by date, with timeline styling.
 class AlertsView extends StatefulWidget {
@@ -22,6 +23,9 @@ class _AlertsViewState extends State<AlertsView>
 
   late AnimationController _emptyStateController;
 
+  bool _bgServiceEnabled = false;
+  bool _notificationsEnabled = true;
+
   @override
   void initState() {
     super.initState();
@@ -29,7 +33,41 @@ class _AlertsViewState extends State<AlertsView>
       vsync: this,
       duration: const Duration(milliseconds: 2000),
     )..repeat(reverse: true);
+    _initPrefs();
     _loadAlerts();
+  }
+
+  Future<void> _initPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _bgServiceEnabled = prefs.getBool('bg_service_enabled') ?? false;
+        _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+      });
+    }
+  }
+
+  Future<void> _toggleBgService(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('bg_service_enabled', value);
+    setState(() {
+      _bgServiceEnabled = value;
+    });
+
+    final service = FlutterBackgroundService();
+    if (value) {
+      await service.startService();
+    } else {
+      service.invoke("stopService");
+    }
+  }
+
+  Future<void> _toggleNotifications(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('notifications_enabled', value);
+    setState(() {
+      _notificationsEnabled = value;
+    });
   }
 
   @override
@@ -346,7 +384,37 @@ class _AlertsViewState extends State<AlertsView>
                 ],
               ),
 
-              const SizedBox(height: 8),
+              const SizedBox(height: 16),
+
+              // Settings toggles
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF12161E),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                ),
+                child: Column(
+                  children: [
+                    SwitchListTile(
+                      title: const Text('Background Monitoring', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                      subtitle: const Text('Poll inverter in background', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                      value: _bgServiceEnabled,
+                      activeColor: const Color(0xFF55D6BE),
+                      onChanged: _toggleBgService,
+                    ),
+                    Divider(height: 1, color: Colors.white.withOpacity(0.05)),
+                    SwitchListTile(
+                      title: const Text('Enable Notifications', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                      subtitle: const Text('Show alerts when background monitoring detects an issue', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                      value: _notificationsEnabled,
+                      activeColor: const Color(0xFF55D6BE),
+                      onChanged: _toggleNotifications,
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
 
               // Stats strip
               if (_alerts.isNotEmpty)
