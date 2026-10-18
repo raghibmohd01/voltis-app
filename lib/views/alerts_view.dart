@@ -3,6 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/alert_event.dart';
 import '../services/database_service.dart';
 import '../services/hybrid_telemetry_service.dart';
+import '../utils/solar_timing_helper.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 
 /// Full-page view of alert history — grouped by date, with timeline styling.
 class AlertsView extends StatefulWidget {
@@ -13,7 +15,7 @@ class AlertsView extends StatefulWidget {
 }
 
 class _AlertsViewState extends State<AlertsView>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   List<AlertEvent> _alerts = [];
   bool _loading = true;
   
@@ -21,6 +23,14 @@ class _AlertsViewState extends State<AlertsView>
   DateTime? _selectedDate;
 
   late AnimationController _emptyStateController;
+  late AnimationController _headerBellController;
+
+  bool _bgServiceEnabled = false;
+  bool _notificationsEnabled = true;
+  bool _settingsExpanded = false;
+
+  // Track which alert IDs are expanded for detail view
+  final Set<int> _expandedAlerts = {};
 
   @override
   void initState() {
@@ -29,40 +39,89 @@ class _AlertsViewState extends State<AlertsView>
       vsync: this,
       duration: const Duration(milliseconds: 2000),
     )..repeat(reverse: true);
-    _loadAlerts();
+    _headerBellController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _initPrefs();
+    _loadAlerts(forceSeed: true);
+  }
+
+  Future<void> _initPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _bgServiceEnabled = prefs.getBool('bg_service_enabled') ?? false;
+        _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+      });
+    }
+  }
+
+  Future<void> _toggleBgService(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('bg_service_enabled', value);
+    setState(() {
+      _bgServiceEnabled = value;
+    });
+
+    final service = FlutterBackgroundService();
+    if (value) {
+      await service.startService();
+    } else {
+      service.invoke("stopService");
+    }
+  }
+
+  Future<void> _toggleNotifications(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('notifications_enabled', value);
+    setState(() {
+      _notificationsEnabled = value;
+    });
   }
 
   @override
   void dispose() {
     _emptyStateController.dispose();
+    _headerBellController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadAlerts() async {
+  Future<void> _loadAlerts({bool forceSeed = false}) async {
     setState(() => _loading = true);
 
     // Seed historical alerts from Firebase (runs once, or on pull-to-refresh)
-    await _seedHistoricalAlerts();
+    await _seedHistoricalAlerts(force: forceSeed);
 
     final alerts = await DatabaseService.instance.getAlertHistory();
+    debugPrint('=== DATABASE ALERTS DUMP (Total: ${alerts.length}) ===');
+    for (final a in alerts) {
+      debugPrint('ALERT: id=${a.id}, type=${a.type}, sev=${a.severityLabel}, title="${a.title}", val=${a.value}, time=${a.timestamp}');
+    }
+    debugPrint('=== END DATABASE ALERTS DUMP ===');
+
     if (mounted) {
       setState(() {
         _alerts = alerts;
         _loading = false;
       });
+      // Ring the bell if there are alerts
+      if (alerts.isNotEmpty) {
+        _headerBellController.forward(from: 0);
+      }
     }
   }
 
   /// Scans Firebase historical telemetry for threshold breaches and
   /// seeds them as alert events in the local DB.
-  Future<void> _seedHistoricalAlerts() async {
+  Future<void> _seedHistoricalAlerts({bool force = false}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final lastScan = prefs.getInt('alert_history_scan') ?? 0;
       final now = DateTime.now().millisecondsSinceEpoch;
 
-      // Only re-scan if last scan was >1 hour ago (avoid duplicating on every visit)
-      if (now - lastScan < 3600000) return;
+      // Only re-scan if forced or last scan was >1 hour ago
+      if (!force && now - lastScan < 3600000) return;
 
       final allHistory = await HybridTelemetryService.instance.getAllFirebaseHistory();
       if (allHistory.isEmpty) return;
@@ -82,6 +141,9 @@ class _AlertsViewState extends State<AlertsView>
       for (final entry in allHistory.entries) {
         final dayData = entry.value;
 
+        DateTime? pvZeroStreakStart;
+        DateTime? pvZeroStreakEnd;
+
         for (final point in dayData) {
           final ts = point['timestamp'] as int? ?? 0;
           if (ts == 0) continue;
@@ -89,9 +151,41 @@ class _AlertsViewState extends State<AlertsView>
           final load = (point['loadPercentage'] as num?)?.toDouble() ?? 0;
           final bv = (point['batteryVoltage'] as num?)?.toDouble() ?? 0;
           final acIn = (point['acInputVoltage'] as num?)?.toDouble() ?? 0;
-          final pvVolt = (point['pvVoltage'] as num?)?.toDouble() ?? 0;
+          final pvPower = (point['pvPower'] as num?)?.toDouble() ?? 0;
           final acOut = (point['acOutputVoltage'] as num?)?.toDouble() ?? 0;
           final dt = DateTime.fromMillisecondsSinceEpoch(ts);
+          final localDt = dt.toLocal();
+
+          // Check for 30+ minute daytime 0W solar outage (solar switch left OFF)
+          final isDaylight = SolarTimingHelper.isDaytimeSolarHours(localDt);
+          if (isDaylight && pvPower <= 0.5) {
+            pvZeroStreakStart ??= localDt;
+            pvZeroStreakEnd = localDt;
+          } else {
+            if (pvZeroStreakStart != null && pvZeroStreakEnd != null) {
+              final durMinutes = pvZeroStreakEnd.difference(pvZeroStreakStart).inMinutes;
+              if (durMinutes >= 30) {
+                final startStr = '${pvZeroStreakStart.hour.toString().padLeft(2, '0')}:${pvZeroStreakStart.minute.toString().padLeft(2, '0')}';
+                final endStr = '${pvZeroStreakEnd.hour.toString().padLeft(2, '0')}:${pvZeroStreakEnd.minute.toString().padLeft(2, '0')}';
+                final alertTs = pvZeroStreakStart.millisecondsSinceEpoch;
+                if (!existingTimestamps.contains(alertTs)) {
+                  await DatabaseService.instance.insertAlert(AlertEvent(
+                    severity: AlertSeverity.critical,
+                    type: AlertType.pv,
+                    title: 'Solar Switch Was OFF — 0W',
+                    message: 'Solar output was 0W for $durMinutes mins during sunlight ($startStr – $endStr). Solar switch/breaker was left OFF.',
+                    value: 0.0,
+                    timestamp: pvZeroStreakStart,
+                    isActive: false,
+                  ));
+                  existingTimestamps.add(alertTs);
+                  seeded++;
+                }
+              }
+            }
+            pvZeroStreakStart = null;
+            pvZeroStreakEnd = null;
+          }
 
           // Check load thresholds
           AlertSeverity? currLoadSev;
@@ -151,8 +245,6 @@ class _AlertsViewState extends State<AlertsView>
             else if (lastBatSev == AlertSeverity.critical && bv >= 45.0) lastBatSev = null;
           }
 
-          // Grid and PV alerts disabled for off-grid setup
-
           // Check System (Output Sag)
           AlertSeverity? currSysSev;
           if (acOut > 0 && (acOut < 200 || acOut > 250)) currSysSev = AlertSeverity.warning;
@@ -175,6 +267,29 @@ class _AlertsViewState extends State<AlertsView>
           }
           if (lastSysSev != null && acOut >= 200 && acOut <= 250) lastSysSev = null;
         }
+
+        // Check if day ended while streak was active
+        if (pvZeroStreakStart != null && pvZeroStreakEnd != null) {
+          final durMinutes = pvZeroStreakEnd.difference(pvZeroStreakStart).inMinutes;
+          if (durMinutes >= 30) {
+            final startStr = '${pvZeroStreakStart.hour.toString().padLeft(2, '0')}:${pvZeroStreakStart.minute.toString().padLeft(2, '0')}';
+            final endStr = '${pvZeroStreakEnd.hour.toString().padLeft(2, '0')}:${pvZeroStreakEnd.minute.toString().padLeft(2, '0')}';
+            final alertTs = pvZeroStreakStart.millisecondsSinceEpoch;
+            if (!existingTimestamps.contains(alertTs)) {
+              await DatabaseService.instance.insertAlert(AlertEvent(
+                severity: AlertSeverity.critical,
+                type: AlertType.pv,
+                title: 'Solar Switch Was OFF — 0W',
+                message: 'Solar output was 0W for $durMinutes mins during sunlight ($startStr – $endStr). Solar switch/breaker was left OFF.',
+                value: 0.0,
+                timestamp: pvZeroStreakStart,
+                isActive: false,
+              ));
+              existingTimestamps.add(alertTs);
+              seeded++;
+            }
+          }
+        }
       }
 
       await prefs.setInt('alert_history_scan', now);
@@ -192,23 +307,48 @@ class _AlertsViewState extends State<AlertsView>
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1A1F2B),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Clear Alert History',
-            style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFFFF4757).withOpacity(0.12),
+              ),
+              child: const Icon(Icons.delete_forever_rounded,
+                  color: Color(0xFFFF4757), size: 18),
+            ),
+            const SizedBox(width: 12),
+            const Text('Clear History',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+          ],
+        ),
         content: const Text(
-          'This will permanently remove all alert records. This action cannot be undone.',
-          style: TextStyle(color: Colors.white70),
+          'This will permanently remove all alert records.\nThis action cannot be undone.',
+          style: TextStyle(color: Colors.white70, height: 1.5),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel',
-                style: TextStyle(color: Colors.white54)),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white54,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            ),
+            child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFFFF4757).withOpacity(0.12),
+              foregroundColor: const Color(0xFFFF4757),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
             child: const Text('Clear All',
-                style: TextStyle(
-                    color: Color(0xFFFF4757), fontWeight: FontWeight.bold)),
+                style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -220,6 +360,44 @@ class _AlertsViewState extends State<AlertsView>
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('alert_history_scan');
       _loadAlerts();
+    }
+  }
+
+  Future<void> _deleteAlert(AlertEvent alert) async {
+    if (alert.id == null) return;
+    
+    setState(() => _alerts.remove(alert));
+    
+    await DatabaseService.instance.deleteAlert(alert.id!);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFF1A1F2B),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+          duration: const Duration(seconds: 4),
+          content: Row(
+            children: [
+              Icon(_severityIcon(alert.severity),
+                  color: _severityColor(alert.severity), size: 16),
+              const SizedBox(width: 10),
+              const Text('Alert dismissed',
+                  style: TextStyle(color: Colors.white70, fontSize: 13)),
+            ],
+          ),
+          action: SnackBarAction(
+            label: 'Undo',
+            textColor: const Color(0xFF55D6BE),
+            onPressed: () async {
+              await DatabaseService.instance.insertAlert(alert);
+              _loadAlerts();
+            },
+          ),
+        ),
+      );
     }
   }
 
@@ -262,6 +440,15 @@ class _AlertsViewState extends State<AlertsView>
     return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
   }
 
+  String _relativeTime(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
   Color _severityColor(AlertSeverity severity) {
     switch (severity) {
       case AlertSeverity.critical:
@@ -299,86 +486,109 @@ class _AlertsViewState extends State<AlertsView>
     }
   }
 
+  String _typeLabel(AlertType type) {
+    switch (type) {
+      case AlertType.load:
+        return 'Load';
+      case AlertType.battery:
+        return 'Battery';
+      case AlertType.grid:
+        return 'Grid';
+      case AlertType.pv:
+        return 'Solar';
+      case AlertType.system:
+        return 'System';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final filteredCount = _groupByDate().values.fold<int>(0, (sum, list) => sum + list.length);
+
     return Scaffold(
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: _loadAlerts,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 120),
-            children: [
-              // Header
-              Row(
-                children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(15),
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFFF6B35), Color(0xFFFF4757)],
-                      ),
-                    ),
-                    child: const Icon(Icons.notifications_active_rounded,
-                        size: 24),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Alerts',
-                            style: TextStyle(
-                                fontSize: 27, fontWeight: FontWeight.w800)),
-                        Text('History & Events',
-                            style: TextStyle(color: Colors.white54)),
-                      ],
-                    ),
-                  ),
-                  if (_alerts.isNotEmpty)
-                    IconButton(
-                      onPressed: _clearAllAlerts,
-                      icon: const Icon(Icons.delete_sweep_rounded,
-                          color: Colors.white38),
-                      tooltip: 'Clear history',
-                    ),
-                ],
+          onRefresh: () => _loadAlerts(forceSeed: true),
+          color: const Color(0xFF55D6BE),
+          backgroundColor: const Color(0xFF12161E),
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
+            ),
+            slivers: [
+              // ── Header ──────────────────────────────────────────
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                  child: _buildHeader(),
+                ),
               ),
 
-              const SizedBox(height: 8),
-
-              // Stats strip
-              if (_alerts.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: _buildStatsStrip(),
+              // ── Settings Panel ──────────────────────────────────
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                  child: _buildSettingsPanel(),
                 ),
+              ),
 
-              const SizedBox(height: 8),
-              
+              // ── Severity Filter Chips ───────────────────────────
               if (_alerts.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _buildDateFilters(),
-                ),
-
-              const SizedBox(height: 4),
-
-              if (_loading)
-                const Center(
+                SliverToBoxAdapter(
                   child: Padding(
-                    padding: EdgeInsets.only(top: 80),
-                    child: CircularProgressIndicator(
-                      color: Color(0xFF55D6BE),
-                      strokeWidth: 2,
+                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+                    child: _buildSeverityFilters(),
+                  ),
+                ),
+
+              // ── Date Filter Chips ──────────────────────────────
+              if (_alerts.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    child: _buildDateFilters(),
+                  ),
+                ),
+
+              // ── Content ─────────────────────────────────────────
+              if (_loading)
+                SliverFillRemaining(
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 36,
+                          height: 36,
+                          child: CircularProgressIndicator(
+                            color: const Color(0xFF55D6BE),
+                            strokeWidth: 2.5,
+                            strokeCap: StrokeCap.round,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Loading alerts...',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.3),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 )
               else if (_alerts.isEmpty)
-                _buildEmptyState()
+                SliverFillRemaining(child: _buildEmptyState())
+              else if (filteredCount == 0)
+                SliverFillRemaining(child: _buildNoResults())
               else
-                ..._buildAlertTimeline(),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate(_buildAlertTimeline()),
+                  ),
+                ),
             ],
           ),
         ),
@@ -386,24 +596,393 @@ class _AlertsViewState extends State<AlertsView>
     );
   }
 
-  Widget _buildStatsStrip() {
-    final critCount =
-        _alerts.where((a) => a.severity == AlertSeverity.critical).length;
-    final alertCount =
-        _alerts.where((a) => a.severity == AlertSeverity.alert).length;
-    final warnCount =
-        _alerts.where((a) => a.severity == AlertSeverity.warning).length;
+  // ── HEADER ────────────────────────────────────────────────────────
+
+  Widget _buildHeader() {
+    final critCount = _alerts.where((a) => a.severity == AlertSeverity.critical).length;
+    final totalCount = _alerts.length;
 
     return Row(
       children: [
-        _buildStatChip('CRITICAL', critCount, const Color(0xFFFF4757), AlertSeverity.critical),
-        const SizedBox(width: 8),
-        _buildStatChip('ALERT', alertCount, const Color(0xFFFF6B35), AlertSeverity.alert),
-        const SizedBox(width: 8),
-        _buildStatChip('WARNING', warnCount, const Color(0xFFF39C12), AlertSeverity.warning),
+        // Animated bell icon with gradient background
+        AnimatedBuilder(
+          animation: _headerBellController,
+          builder: (context, child) {
+            final shake = _headerBellController.value < 0.5
+                ? _headerBellController.value * 0.15
+                : (1 - _headerBellController.value) * 0.15;
+            return Transform.rotate(
+              angle: shake * ((_headerBellController.value * 6).toInt().isEven ? 1 : -1),
+              child: Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF55D6BE), Color(0xFF2FA4FF)],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF55D6BE).withOpacity(0.25),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: const Icon(Icons.shield_outlined,
+                    size: 22, color: Colors.white),
+              ),
+            );
+          },
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Text('Alerts',
+                      style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFDCE2EC),
+                          letterSpacing: -0.3)),
+                  const SizedBox(width: 8),
+                  if (totalCount > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF55D6BE).withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '$totalCount',
+                        style: const TextStyle(
+                          color: Color(0xFF55D6BE),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              const Text(
+                'History & Notifications',
+                style: TextStyle(
+                  color: Color(0xFF8E9BAE),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_alerts.isNotEmpty)
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _clearAllAlerts,
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.04),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.06)),
+                ),
+                child: const Icon(Icons.delete_sweep_rounded,
+                    color: Colors.white30, size: 20),
+              ),
+            ),
+          ),
       ],
     );
   }
+
+  // ── SETTINGS PANEL ────────────────────────────────────────────────
+
+  Widget _buildSettingsPanel() {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF12161E),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.15),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Header row — tappable to expand/collapse
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => setState(() => _settingsExpanded = !_settingsExpanded),
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF55D6BE).withOpacity(0.1),
+                      ),
+                      child: const Icon(Icons.tune_rounded,
+                          color: Color(0xFF55D6BE), size: 16),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Monitoring Settings',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ),
+                    // Status dots
+                    Row(
+                      children: [
+                        _buildStatusDot(_bgServiceEnabled, 'BG'),
+                        const SizedBox(width: 6),
+                        _buildStatusDot(_notificationsEnabled, 'Notif'),
+                      ],
+                    ),
+                    const SizedBox(width: 8),
+                    AnimatedRotation(
+                      turns: _settingsExpanded ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOutCubic,
+                      child: Icon(Icons.keyboard_arrow_down_rounded,
+                          color: Colors.white.withOpacity(0.3), size: 22),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // Expandable content
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: Column(
+              children: [
+                Divider(height: 1, color: Colors.white.withOpacity(0.05)),
+                _buildToggleRow(
+                  icon: Icons.sync_rounded,
+                  iconColor: const Color(0xFF2FA4FF),
+                  title: 'Background Monitoring',
+                  subtitle: 'Poll inverter when app is closed',
+                  value: _bgServiceEnabled,
+                  onChanged: _toggleBgService,
+                ),
+                Divider(height: 1, indent: 62, color: Colors.white.withOpacity(0.04)),
+                _buildToggleRow(
+                  icon: Icons.notifications_active_outlined,
+                  iconColor: const Color(0xFFF39C12),
+                  title: 'Push Notifications',
+                  subtitle: 'Get alerted for critical issues',
+                  value: _notificationsEnabled,
+                  onChanged: _toggleNotifications,
+                ),
+                const SizedBox(height: 4),
+              ],
+            ),
+            crossFadeState: _settingsExpanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 300),
+            sizeCurve: Curves.easeOutCubic,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusDot(bool active, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: active ? const Color(0xFF55D6BE) : Colors.white24,
+            boxShadow: active
+                ? [BoxShadow(color: const Color(0xFF55D6BE).withOpacity(0.4), blurRadius: 4)]
+                : [],
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w600,
+            color: active ? Colors.white54 : Colors.white24,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildToggleRow({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: iconColor.withOpacity(0.1),
+            ),
+            child: Icon(icon, color: iconColor, size: 16),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(height: 1),
+                Text(subtitle,
+                    style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.35))),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 28,
+            child: Switch(
+              value: value,
+              activeColor: const Color(0xFF55D6BE),
+              onChanged: onChanged,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── SEVERITY FILTERS ──────────────────────────────────────────────
+
+  Widget _buildSeverityFilters() {
+    final critCount = _alerts.where((a) => a.severity == AlertSeverity.critical).length;
+    final alertCount = _alerts.where((a) => a.severity == AlertSeverity.alert).length;
+    final warnCount = _alerts.where((a) => a.severity == AlertSeverity.warning).length;
+
+    return Row(
+      children: [
+        _buildSeverityPill(
+          'Critical',
+          critCount,
+          const Color(0xFFFF4757),
+          AlertSeverity.critical,
+          Icons.error_rounded,
+        ),
+        const SizedBox(width: 8),
+        _buildSeverityPill(
+          'Alert',
+          alertCount,
+          const Color(0xFFFF6B35),
+          AlertSeverity.alert,
+          Icons.warning_amber_rounded,
+        ),
+        const SizedBox(width: 8),
+        _buildSeverityPill(
+          'Warning',
+          warnCount,
+          const Color(0xFFF39C12),
+          AlertSeverity.warning,
+          Icons.info_rounded,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSeverityPill(String label, int count, Color color,
+      AlertSeverity severity, IconData icon) {
+    final isSelected = _selectedSeverity == severity;
+    final isFaded = _selectedSeverity != null && !isSelected;
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _selectedSeverity = _selectedSeverity == severity ? null : severity;
+          });
+        },
+        child: AnimatedOpacity(
+          opacity: isFaded ? 0.35 : 1.0,
+          duration: const Duration(milliseconds: 250),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+            decoration: BoxDecoration(
+              color: isSelected ? color.withOpacity(0.15) : const Color(0xFF12161E),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: isSelected ? color.withOpacity(0.4) : Colors.white.withOpacity(0.05),
+                width: isSelected ? 1.5 : 1.0,
+              ),
+              boxShadow: isSelected
+                  ? [BoxShadow(color: color.withOpacity(0.1), blurRadius: 12, offset: const Offset(0, 4))]
+                  : [],
+            ),
+            child: Column(
+              children: [
+                Text(
+                  '$count',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFDCE2EC),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── DATE FILTERS ──────────────────────────────────────────────────
 
   Widget _buildDateFilters() {
     // Get unique dates from all alerts
@@ -435,7 +1014,9 @@ class _AlertsViewState extends State<AlertsView>
                              _selectedDate!.year == date.year && 
                              _selectedDate!.month == date.month && 
                              _selectedDate!.day == date.day;
-          return _buildDateChip(_dateKey(date).toUpperCase(), isSelected, () {
+
+          final label = _dateKey(date);
+          return _buildDateChip(label, isSelected, () {
             setState(() => _selectedDate = date);
           });
         },
@@ -446,92 +1027,45 @@ class _AlertsViewState extends State<AlertsView>
   Widget _buildDateChip(String label, bool isSelected, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF55D6BE).withOpacity(0.15) : Colors.white.withOpacity(0.04),
+          color: isSelected
+              ? const Color(0xFF55D6BE).withOpacity(0.12)
+              : Colors.white.withOpacity(0.04),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: isSelected ? const Color(0xFF55D6BE).withOpacity(0.5) : Colors.white.withOpacity(0.1),
+            color: isSelected
+                ? const Color(0xFF55D6BE).withOpacity(0.4)
+                : Colors.white.withOpacity(0.08),
           ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? const Color(0xFF55D6BE) : Colors.white60,
+            color: isSelected ? const Color(0xFF55D6BE) : Colors.white54,
             fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
-            fontSize: 11,
-            letterSpacing: 0.5,
+            fontSize: 12,
+            letterSpacing: 0.3,
           ),
         ),
       ),
     );
   }
 
-  Widget _buildStatChip(String label, int count, Color color, AlertSeverity severity) {
-    final isSelected = _selectedSeverity == severity;
-    final isFaded = _selectedSeverity != null && !isSelected;
-
-    return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          setState(() {
-            if (_selectedSeverity == severity) {
-              _selectedSeverity = null; // Toggle off
-            } else {
-              _selectedSeverity = severity;
-            }
-          });
-        },
-        child: Opacity(
-          opacity: isFaded ? 0.3 : 1.0,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-            decoration: BoxDecoration(
-              color: isSelected ? color.withOpacity(0.2) : color.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: isSelected ? color : color.withOpacity(0.15),
-                width: isSelected ? 1.5 : 1.0,
-              ),
-            ),
-            child: Column(
-              children: [
-                Text(
-                  '$count',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                    color: color,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 8,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1,
-                    color: color.withOpacity(0.7),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  // ── EMPTY STATE ───────────────────────────────────────────────────
 
   Widget _buildEmptyState() {
     return AnimatedBuilder(
       animation: _emptyStateController,
       builder: (context, child) {
         final scale = 0.95 + _emptyStateController.value * 0.05;
-        return Padding(
-          padding: const EdgeInsets.only(top: 80),
+        final glowOpacity = 0.05 + _emptyStateController.value * 0.1;
+        return Center(
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Transform.scale(
                 scale: scale,
@@ -540,25 +1074,26 @@ class _AlertsViewState extends State<AlertsView>
                   height: 100,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: LinearGradient(
+                    gradient: RadialGradient(
                       colors: [
-                        const Color(0xFF55D6BE).withOpacity(0.1),
-                        const Color(0xFF2FA4FF).withOpacity(0.05),
+                        const Color(0xFF55D6BE).withOpacity(glowOpacity),
+                        Colors.transparent,
                       ],
+                      radius: 1.2,
                     ),
                     border: Border.all(
-                      color: const Color(0xFF55D6BE).withOpacity(0.2),
+                      color: const Color(0xFF55D6BE).withOpacity(0.15),
                     ),
                   ),
                   child: Icon(
-                    Icons.verified_user_rounded,
-                    size: 44,
+                    Icons.shield_rounded,
+                    size: 42,
                     color: const Color(0xFF55D6BE)
-                        .withOpacity(0.5 + _emptyStateController.value * 0.3),
+                        .withOpacity(0.4 + _emptyStateController.value * 0.3),
                   ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 28),
               const Text(
                 'All Clear',
                 style: TextStyle(
@@ -573,8 +1108,8 @@ class _AlertsViewState extends State<AlertsView>
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 13,
-                  color: Colors.white.withOpacity(0.35),
-                  height: 1.5,
+                  color: Colors.white.withOpacity(0.3),
+                  height: 1.6,
                 ),
               ),
             ],
@@ -584,37 +1119,154 @@ class _AlertsViewState extends State<AlertsView>
     );
   }
 
+  Widget _buildNoResults() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withOpacity(0.03),
+              border: Border.all(color: Colors.white.withOpacity(0.06)),
+            ),
+            child: Icon(Icons.filter_list_off_rounded,
+                size: 32, color: Colors.white.withOpacity(0.2)),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'No matching alerts',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Colors.white.withOpacity(0.5),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Try changing your filters',
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.white.withOpacity(0.25),
+            ),
+          ),
+          const SizedBox(height: 20),
+          GestureDetector(
+            onTap: () {
+              setState(() {
+                _selectedSeverity = null;
+                _selectedDate = null;
+              });
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF55D6BE).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF55D6BE).withOpacity(0.2)),
+              ),
+              child: const Text(
+                'Clear Filters',
+                style: TextStyle(
+                  color: Color(0xFF55D6BE),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── ALERT TIMELINE ────────────────────────────────────────────────
+
   List<Widget> _buildAlertTimeline() {
     final grouped = _groupByDate();
     final widgets = <Widget>[];
 
     for (final entry in grouped.entries) {
-      // Date header
+      // Date section header
       widgets.add(
         Padding(
-          padding: const EdgeInsets.only(left: 8, top: 8, bottom: 10),
-          child: Text(
-            entry.key.toUpperCase(),
-            style: const TextStyle(
-              color: Colors.white38,
-              fontWeight: FontWeight.w800,
-              fontSize: 11,
-              letterSpacing: 1.5,
-            ),
+          padding: const EdgeInsets.only(left: 4, top: 8, bottom: 10),
+          child: Row(
+            children: [
+              Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.06),
+                ),
+                child: Icon(Icons.calendar_today_rounded,
+                    size: 10, color: Colors.white.withOpacity(0.35)),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                entry.key.toUpperCase(),
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.35),
+                  fontWeight: FontWeight.w800,
+                  fontSize: 11,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Container(
+                  height: 1,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.white.withOpacity(0.06),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${entry.value.length}',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.2),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 11,
+                ),
+              ),
+            ],
           ),
         ),
       );
 
       // Alert items with staggered animation
       for (int i = 0; i < entry.value.length; i++) {
+        final alert = entry.value[i];
         widgets.add(
           _AlertTimelineItem(
-            alert: entry.value[i],
-            color: _severityColor(entry.value[i].severity),
-            severityIcon: _severityIcon(entry.value[i].severity),
-            typeIcon: _typeIcon(entry.value[i].type),
+            alert: alert,
+            color: _severityColor(alert.severity),
+            severityIcon: _severityIcon(alert.severity),
+            typeIcon: _typeIcon(alert.type),
+            typeLabel: _typeLabel(alert.type),
+            relativeTime: _relativeTime(alert.timestamp),
             isLast: i == entry.value.length - 1,
             index: i,
+            isExpanded: _expandedAlerts.contains(alert.id),
+            onTap: () {
+              setState(() {
+                if (_expandedAlerts.contains(alert.id)) {
+                  _expandedAlerts.remove(alert.id);
+                } else {
+                  _expandedAlerts.add(alert.id ?? 0);
+                }
+              });
+            },
+            onDismiss: () => _deleteAlert(alert),
           ),
         );
       }
@@ -632,16 +1284,26 @@ class _AlertTimelineItem extends StatefulWidget {
   final Color color;
   final IconData severityIcon;
   final IconData typeIcon;
+  final String typeLabel;
+  final String relativeTime;
   final bool isLast;
   final int index;
+  final bool isExpanded;
+  final VoidCallback onTap;
+  final VoidCallback onDismiss;
 
   const _AlertTimelineItem({
     required this.alert,
     required this.color,
     required this.severityIcon,
     required this.typeIcon,
+    required this.typeLabel,
+    required this.relativeTime,
     required this.isLast,
     required this.index,
+    required this.isExpanded,
+    required this.onTap,
+    required this.onDismiss,
   });
 
   @override
@@ -659,17 +1321,18 @@ class _AlertTimelineItemState extends State<_AlertTimelineItem>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 400),
+      duration: const Duration(milliseconds: 450),
     );
-    _slideAnimation = Tween<double>(begin: 30, end: 0).animate(
+    _slideAnimation = Tween<double>(begin: 40, end: 0).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic),
     );
     _fadeAnimation = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeOut),
     );
 
-    // Stagger the animation
-    Future.delayed(Duration(milliseconds: 50 * widget.index), () {
+    // Stagger the animation (cap to avoid long waits for large lists)
+    final delay = (50 * widget.index).clamp(0, 500);
+    Future.delayed(Duration(milliseconds: delay), () {
       if (mounted) _controller.forward();
     });
   }
@@ -694,134 +1357,222 @@ class _AlertTimelineItemState extends State<_AlertTimelineItem>
             opacity: _fadeAnimation.value,
             child: Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF12161E),
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: widget.color.withOpacity(0.08),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
-                      blurRadius: 10,
-                      spreadRadius: 1,
+              child: Dismissible(
+                key: ValueKey(widget.alert.id ?? widget.alert.timestamp.millisecondsSinceEpoch),
+                direction: DismissDirection.endToStart,
+                onDismissed: (_) => widget.onDismiss(),
+                background: Container(
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 24),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.transparent,
+                        const Color(0xFFFF4757).withOpacity(0.15),
+                      ],
                     ),
-                  ],
-                ),
-                child: IntrinsicHeight(
-                  child: Row(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // Colored left stripe
-                      Container(
-                        width: 4,
-                        decoration: BoxDecoration(
-                          color: widget.color,
-                          borderRadius: const BorderRadius.only(
-                            topLeft: Radius.circular(18),
-                            bottomLeft: Radius.circular(18),
-                          ),
-                        ),
+                      Icon(Icons.delete_outline_rounded,
+                          color: const Color(0xFFFF4757).withOpacity(0.7), size: 22),
+                      const SizedBox(height: 2),
+                      Text('Dismiss',
+                          style: TextStyle(
+                            color: const Color(0xFFFF4757).withOpacity(0.6),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          )),
+                    ],
+                  ),
+                ),
+                child: GestureDetector(
+                  onTap: widget.onTap,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOutCubic,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF131722),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: widget.isExpanded
+                            ? widget.color.withOpacity(0.20)
+                            : Colors.white.withOpacity(0.04),
                       ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.18),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(18),
+                      child: Column(
+                        children: [
+                          // Main card content — soft, eye-friendly layout
+                          Padding(
+                            padding: const EdgeInsets.all(15),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Type icon — calm squircle container
+                                Container(
+                                  width: 38,
+                                  height: 38,
+                                  margin: const EdgeInsets.only(top: 1),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(12),
+                                    color: const Color(0xFF1A2130),
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.04),
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    widget.typeIcon,
+                                    color: const Color(0xFF8E9BAE),
+                                    size: 18,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                // Title & message
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      // Severity badge + time header
+                                      Row(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 7, vertical: 2.5),
+                                            decoration: BoxDecoration(
+                                              color: widget.color.withOpacity(0.12),
+                                              borderRadius: BorderRadius.circular(6),
+                                            ),
+                                            child: Text(
+                                              widget.alert.severityLabel,
+                                              style: TextStyle(
+                                                fontSize: 9,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: 0.4,
+                                                color: widget.color,
+                                              ),
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          // Time — soft readable slate timestamp
+                                          Text(
+                                            timeStr,
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w500,
+                                              color: Color(0xFF64748B),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      // Title — soft off-white, no sharp glare/halation
+                                      Text(
+                                        widget.alert.title,
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFFDCE2EC),
+                                          letterSpacing: -0.1,
+                                          height: 1.25,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      // Message — soothing neutral slate, easy on the eyes
+                                      Text(
+                                        widget.alert.message,
+                                        maxLines: widget.isExpanded ? 10 : 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w400,
+                                          color: Color(0xFF8E9BAE),
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
 
-                      // Content
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.all(14),
-                          child: Row(
-                            children: [
-                              // Icon
-                              Container(
-                                width: 36,
-                                height: 36,
+                          // ── Expanded detail section ──
+                          AnimatedCrossFade(
+                            firstChild: const SizedBox.shrink(),
+                            secondChild: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.fromLTRB(15, 0, 15, 14),
+                              child: Container(
+                                padding: const EdgeInsets.all(13),
                                 decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: widget.color.withOpacity(0.12),
+                                  color: const Color(0xFF0F131A),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.04),
+                                  ),
                                 ),
-                                child: Icon(
-                                  widget.severityIcon,
-                                  color: widget.color,
-                                  size: 18,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-
-                              // Title & message
-                              Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
+                                    // Value row
                                     Row(
                                       children: [
-                                        // Severity badge
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 6, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color:
-                                                widget.color.withOpacity(0.12),
-                                            borderRadius:
-                                                BorderRadius.circular(4),
-                                          ),
-                                          child: Text(
-                                            widget.alert.severityLabel,
-                                            style: TextStyle(
-                                              fontSize: 8,
-                                              fontWeight: FontWeight.w900,
-                                              letterSpacing: 0.8,
-                                              color: widget.color,
-                                            ),
-                                          ),
+                                        _detailItem(
+                                          'Value',
+                                          _formatValue(widget.alert),
+                                          widget.color,
                                         ),
-                                        const SizedBox(width: 6),
-                                        Icon(widget.typeIcon,
-                                            size: 12,
-                                            color: Colors.white24),
+                                        const SizedBox(width: 24),
+                                        _detailItem(
+                                          'Time',
+                                          '${widget.alert.timestamp.hour.toString().padLeft(2, '0')}:${widget.alert.timestamp.minute.toString().padLeft(2, '0')}:${widget.alert.timestamp.second.toString().padLeft(2, '0')}',
+                                          const Color(0xFFCBD5E1),
+                                        ),
+                                        const SizedBox(width: 24),
+                                        _detailItem(
+                                          'Source',
+                                          widget.typeLabel,
+                                          const Color(0xFFCBD5E1),
+                                        ),
                                       ],
                                     ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      widget.alert.title,
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700,
-                                        color: Colors.white,
+                                    if (widget.alert.message.length > 60) ...[
+                                      const SizedBox(height: 10),
+                                      Divider(height: 1, color: Colors.white.withOpacity(0.04)),
+                                      const SizedBox(height: 9),
+                                      Text(
+                                        widget.alert.message,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF8E9BAE),
+                                          height: 1.45,
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      widget.alert.message,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.white.withOpacity(0.4),
-                                        height: 1.3,
-                                      ),
-                                    ),
+                                    ],
                                   ],
                                 ),
                               ),
-
-                              // Timestamp
-                              Column(
-                                mainAxisAlignment: MainAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    timeStr,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.white30,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                            ),
+                            crossFadeState: widget.isExpanded
+                                ? CrossFadeState.showSecond
+                                : CrossFadeState.showFirst,
+                            duration: const Duration(milliseconds: 300),
+                            sizeCurve: Curves.easeOutCubic,
                           ),
-                        ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -830,5 +1581,46 @@ class _AlertTimelineItemState extends State<_AlertTimelineItem>
         );
       },
     );
+  }
+
+  Widget _detailItem(String label, String value, Color valueColor) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 9.5,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.3,
+            color: Color(0xFF64748B),
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: valueColor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _formatValue(AlertEvent alert) {
+    switch (alert.type) {
+      case AlertType.load:
+        return '${alert.value.toStringAsFixed(0)}%';
+      case AlertType.battery:
+        return '${alert.value.toStringAsFixed(1)}V';
+      case AlertType.grid:
+        return '${alert.value.toStringAsFixed(0)}V';
+      case AlertType.pv:
+        return '${alert.value.toStringAsFixed(1)}V';
+      case AlertType.system:
+        return '${alert.value.toStringAsFixed(0)}V';
+    }
   }
 }

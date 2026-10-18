@@ -30,12 +30,16 @@ class CustomTitle extends StatelessWidget {
             children: [
               Text(title,
                   style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w800)),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFFDCE2EC),
+                      letterSpacing: -0.1)),
               Text(subtitle,
                   style: TextStyle(
-                      color: subtitleColor ?? Colors.white38, fontSize: 11,
+                      color: subtitleColor ?? const Color(0xFF8E9BAE),
+                      fontSize: 11,
                       fontWeight: subtitleColor != null
-                          ? FontWeight.w700
+                          ? FontWeight.w600
                           : FontWeight.normal)),
             ],
           ),

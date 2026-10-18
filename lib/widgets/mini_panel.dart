@@ -24,14 +24,17 @@ class MiniPanel extends StatelessWidget {
                 children: [
                   Text(title,
                       style: const TextStyle(
-                          color: Colors.white38,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800)),
+                          color: Color(0xFF64748B),
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5)),
                   const SizedBox(height: 3),
                   Text(text,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w700)),
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFDCE2EC))),
                 ],
               ),
             ),

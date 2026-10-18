@@ -24,36 +24,12 @@ class _StatisticsViewState extends State<StatisticsView> {
   List<Map<String, dynamic>> _last7DaysData = [];
   List<Map<String, dynamic>> _last30DaysData = [];
   bool _loading = true;
-  bool _bgServiceEnabled = false;
   int _selectedDay = DateTime.now().day;
 
   @override
   void initState() {
     super.initState();
-    _initPrefs();
     _loadStats();
-  }
-
-  Future<void> _initPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _bgServiceEnabled = prefs.getBool('bg_service_enabled') ?? false;
-    });
-  }
-
-  Future<void> _toggleBgService(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('bg_service_enabled', value);
-    setState(() {
-      _bgServiceEnabled = value;
-    });
-
-    final service = FlutterBackgroundService();
-    if (value) {
-      await service.startService();
-    } else {
-      service.invoke("stopService");
-    }
   }
 
   Future<void> _loadStats() async {
@@ -212,9 +188,12 @@ class _StatisticsViewState extends State<StatisticsView> {
                       children: [
                         Text('Statistics',
                             style: TextStyle(
-                                fontSize: 27, fontWeight: FontWeight.w800)),
+                                fontSize: 27,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFFDCE2EC),
+                                letterSpacing: -0.3)),
                         Text("Rolling 30-day history",
-                            style: TextStyle(color: Colors.white54)),
+                            style: TextStyle(color: Color(0xFF8E9BAE))),
                       ],
                     ),
                   ),
@@ -231,7 +210,7 @@ class _StatisticsViewState extends State<StatisticsView> {
                 // Section: TODAY
                 const Padding(
                   padding: EdgeInsets.only(left: 8.0, bottom: 8.0),
-                  child: Text('TODAY', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+                  child: Text('TODAY', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, letterSpacing: 1.0, fontSize: 11)),
                 ),
                 CustomCard(
                   child: Column(
@@ -258,7 +237,7 @@ class _StatisticsViewState extends State<StatisticsView> {
                 // Section: LAST 30 DAYS
                 const Padding(
                   padding: EdgeInsets.only(left: 8.0, bottom: 8.0),
-                  child: Text('LAST 30 DAYS', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+                  child: Text('LAST 30 DAYS', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, letterSpacing: 1.0, fontSize: 11)),
                 ),
                 CustomCard(
                   child: Column(
@@ -285,15 +264,15 @@ class _StatisticsViewState extends State<StatisticsView> {
                 // Section: CHARTS
                 const Padding(
                   padding: EdgeInsets.only(left: 8.0, bottom: 8.0),
-                  child: Text('GRAPHS', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
+                  child: Text('GRAPHS', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, letterSpacing: 1.0, fontSize: 11)),
                 ),
                 
                 // Today Expanded View
                 CustomCard(
                   child: ExpansionTile(
                     initiallyExpanded: true,
-                    title: const Text('Daily Trends', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
-                    subtitle: const Text('Detailed 5-minute interval data', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    title: const Text('Daily Trends', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFFDCE2EC))),
+                    subtitle: const Text('Detailed 5-minute interval data', style: TextStyle(color: Color(0xFF8E9BAE), fontSize: 12)),
                     iconColor: const Color(0xFF55D6BE),
                     collapsedIconColor: Colors.white70,
                     childrenPadding: const EdgeInsets.only(bottom: 16),
@@ -329,7 +308,10 @@ class _StatisticsViewState extends State<StatisticsView> {
                         ),
                         isArea: true,
                       ),
-                      const SizedBox(height: 32),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 22),
+                        child: Divider(color: Colors.white12, height: 1, thickness: 1),
+                      ),
                       TelemetryChart(
                         data: _historyData,
                         title: 'Load (%)',
@@ -341,7 +323,10 @@ class _StatisticsViewState extends State<StatisticsView> {
                           colors: [Color(0xFF2ECC71), Color(0xFFF39C12), Color(0xFFE74C3C)],
                         ),
                       ),
-                      const SizedBox(height: 32),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 22),
+                        child: Divider(color: Colors.white12, height: 1, thickness: 1),
+                      ),
                       TelemetryChart(
                         data: _historyData,
                         title: 'Battery Voltage (V)',
@@ -362,8 +347,8 @@ class _StatisticsViewState extends State<StatisticsView> {
                 CustomCard(
                   child: ExpansionTile(
                     initiallyExpanded: false,
-                    title: const Text('Last 7 Days', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
-                    subtitle: const Text('Weekly summary trends', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    title: const Text('Last 7 Days', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFFDCE2EC))),
+                    subtitle: const Text('Weekly summary trends', style: TextStyle(color: Color(0xFF8E9BAE), fontSize: 12)),
                     iconColor: const Color(0xFF55D6BE),
                     collapsedIconColor: Colors.white70,
                     childrenPadding: const EdgeInsets.all(16),
@@ -371,7 +356,7 @@ class _StatisticsViewState extends State<StatisticsView> {
                       if (_last7DaysData.isEmpty)
                         const Padding(
                           padding: EdgeInsets.all(16.0),
-                          child: Text('Not enough data yet.', style: TextStyle(color: Colors.white54)),
+                          child: Text('Not enough data yet.', style: TextStyle(color: Color(0xFF8E9BAE))),
                         )
                       else ...[
                         TelemetryChart(
@@ -387,7 +372,10 @@ class _StatisticsViewState extends State<StatisticsView> {
                           isArea: true,
                           isDaily: true,
                         ),
-                        const SizedBox(height: 32),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 22),
+                          child: Divider(color: Colors.white12, height: 1, thickness: 1),
+                        ),
                         TelemetryChart(
                           data: _last7DaysData,
                           title: 'Peak Load (%)',
@@ -411,8 +399,8 @@ class _StatisticsViewState extends State<StatisticsView> {
                 CustomCard(
                   child: ExpansionTile(
                     initiallyExpanded: false,
-                    title: const Text('Last 30 Days', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
-                    subtitle: const Text('Monthly summary trends', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    title: const Text('Last 30 Days', style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFFDCE2EC))),
+                    subtitle: const Text('Monthly summary trends', style: TextStyle(color: Color(0xFF8E9BAE), fontSize: 12)),
                     iconColor: const Color(0xFF55D6BE),
                     collapsedIconColor: Colors.white70,
                     childrenPadding: const EdgeInsets.all(16),
@@ -436,7 +424,10 @@ class _StatisticsViewState extends State<StatisticsView> {
                           isArea: true,
                           isDaily: true,
                         ),
-                        const SizedBox(height: 32),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 22),
+                          child: Divider(color: Colors.white12, height: 1, thickness: 1),
+                        ),
                         TelemetryChart(
                           data: _last30DaysData,
                           title: 'Peak Load (%)',
@@ -455,25 +446,6 @@ class _StatisticsViewState extends State<StatisticsView> {
                   ),
                 ),
 
-                const SizedBox(height: 24),
-
-
-                const SizedBox(height: 24),
-                
-                // Section: SETTINGS
-                const Padding(
-                  padding: EdgeInsets.only(left: 8.0, bottom: 8.0),
-                  child: Text('SETTINGS', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-                ),
-                CustomCard(
-                  child: SwitchListTile(
-                    title: const Text('Background Alerts', style: TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: const Text('Poll inverter in background to provide instant overload notifications. Only works on local Wi-Fi, not via Firebase.', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                    value: _bgServiceEnabled,
-                    activeColor: const Color(0xFF55D6BE),
-                    onChanged: (val) => _toggleBgService(val),
-                  ),
-                ),
                   ],
                 ),
               ),

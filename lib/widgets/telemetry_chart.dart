@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import '../utils/formatters.dart';
+import '../utils/color_helpers.dart';
 
 class TelemetryChart extends StatelessWidget {
   final List<Map<String, dynamic>> data;
@@ -9,6 +11,7 @@ class TelemetryChart extends StatelessWidget {
   final LinearGradient? gradient;
   final bool isArea;
   final bool isDaily;
+  final String? unit;
 
   const TelemetryChart({
     super.key,
@@ -19,7 +22,75 @@ class TelemetryChart extends StatelessWidget {
     this.gradient,
     this.isArea = false,
     this.isDaily = false,
+    this.unit,
   });
+
+  String _formatValue(double val) {
+    if (metricKey == 'pvPower') {
+      return formatPower(val);
+    } else if (metricKey == 'batteryVoltage') {
+      return '${val.toStringAsFixed(1)} V';
+    } else if (metricKey == 'loadPercentage') {
+      return '${val.toStringAsFixed(1)}%';
+    }
+    return '${val.toStringAsFixed(1)}${unit != null ? ' $unit' : ''}';
+  }
+
+  Widget _buildStatTile({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: color.withValues(alpha: 0.2),
+            width: 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 12, color: color),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                value,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,8 +112,15 @@ class TelemetryChart extends StatelessWidget {
     final maxX = spots.last.x;
     final xRange = maxX - minX;
 
-    double actualMin = spots.map((s) => s.y).reduce((a, b) => a < b ? a : b);
-    double actualMax = spots.map((s) => s.y).reduce((a, b) => a > b ? a : b);
+    final values = spots.map((s) => s.y).toList();
+    final nonZeroValues = values.where((v) => v > 0).toList();
+    final statValues = (metricKey == 'batteryVoltage' && nonZeroValues.isNotEmpty)
+        ? nonZeroValues
+        : values;
+
+    final double actualMin = statValues.reduce((a, b) => a < b ? a : b);
+    final double actualMax = statValues.reduce((a, b) => a > b ? a : b);
+    final double avgVal = statValues.reduce((a, b) => a + b) / statValues.length;
 
     double finalMinY = 0;
     double finalMaxY = 100;
@@ -60,10 +138,28 @@ class TelemetryChart extends StatelessWidget {
 
     final yRange = finalMaxY - finalMinY;
 
+    Color maxColor = const Color(0xFF2ECC71);
+    Color avgColor = const Color(0xFF5B9DFF);
+    Color minColor = const Color(0xFFF39C12);
+
+    if (metricKey == 'loadPercentage') {
+      maxColor = getLoadColor(actualMax);
+      avgColor = const Color(0xFF5B9DFF);
+      minColor = getLoadColor(actualMin);
+    } else if (metricKey == 'batteryVoltage') {
+      maxColor = getBatteryColor(actualMax);
+      avgColor = const Color(0xFF5B9DFF);
+      minColor = getBatteryColor(actualMin);
+    } else if (metricKey == 'pvPower') {
+      maxColor = actualMax >= 1500 ? const Color(0xFF2ECC71) : const Color(0xFF55D6BE);
+      avgColor = const Color(0xFF55D6BE);
+      minColor = const Color(0xFFF39C12);
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+        Text(title, style: const TextStyle(color: Color(0xFFDCE2EC), fontWeight: FontWeight.w600, fontSize: 13.5)),
         const SizedBox(height: 16),
         SizedBox(
           height: 180,
@@ -151,10 +247,10 @@ class TelemetryChart extends StatelessWidget {
                   dotData: const FlDotData(show: false),
                   belowBarData: BarAreaData(
                     show: isArea,
-                    color: gradient == null ? color.withOpacity(0.2) : null,
+                    color: gradient == null ? color.withValues(alpha: 0.2) : null,
                     gradient: gradient != null 
                         ? LinearGradient(
-                            colors: gradient!.colors.map((c) => c.withOpacity(0.2)).toList(),
+                            colors: gradient!.colors.map((c) => c.withValues(alpha: 0.2)).toList(),
                             stops: gradient!.stops,
                             begin: gradient!.begin,
                             end: gradient!.end,
@@ -165,6 +261,31 @@ class TelemetryChart extends StatelessWidget {
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            _buildStatTile(
+              label: 'MAX',
+              value: _formatValue(actualMax),
+              icon: Icons.arrow_upward_rounded,
+              color: maxColor,
+            ),
+            const SizedBox(width: 8),
+            _buildStatTile(
+              label: 'AVG',
+              value: _formatValue(avgVal),
+              icon: Icons.show_chart_rounded,
+              color: avgColor,
+            ),
+            const SizedBox(width: 8),
+            _buildStatTile(
+              label: 'LOW',
+              value: _formatValue(actualMin),
+              icon: Icons.arrow_downward_rounded,
+              color: minColor,
+            ),
+          ],
         ),
       ],
     );

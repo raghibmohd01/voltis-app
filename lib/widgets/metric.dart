@@ -12,10 +12,10 @@ class Metric extends StatelessWidget {
         children: [
           Text(label,
               style: const TextStyle(
-                  color: Colors.white38,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.2)),
+                  color: Color(0xFF64748B),
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.0)),
           const SizedBox(height: 4),
           Row(
             crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -28,13 +28,13 @@ class Metric extends StatelessWidget {
                   child: Text(value,
                       style: TextStyle(
                           fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                          color: valueColor)),
+                          fontWeight: FontWeight.w700,
+                          color: valueColor ?? const Color(0xFFDCE2EC))),
                 ),
               ),
               if (unit.isNotEmpty)
                 Text(' $unit',
-                    style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                    style: const TextStyle(color: Color(0xFF64748B), fontSize: 11)),
             ],
           ),
         ],

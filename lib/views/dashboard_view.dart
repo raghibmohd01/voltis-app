@@ -4,6 +4,7 @@ import '../utils/color_helpers.dart';
 import '../utils/formatters.dart';
 import '../notification_service.dart';
 import '../services/hybrid_telemetry_service.dart';
+import '../utils/solar_timing_helper.dart';
 
 import '../widgets/card_widget.dart';
 import '../widgets/title_widget.dart';
@@ -119,9 +120,12 @@ class _DashboardViewState extends State<DashboardView> {
                           children: [
                             Text('Inverter',
                                 style: TextStyle(
-                                    fontSize: 27, fontWeight: FontWeight.w800)),
+                                    fontSize: 27,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFFDCE2EC),
+                                    letterSpacing: -0.3)),
                             Text('Live Dashboard',
-                                style: TextStyle(color: Colors.white54)),
+                                style: TextStyle(color: Color(0xFF8E9BAE))),
                           ],
                         ),
                       ),

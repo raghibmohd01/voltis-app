@@ -272,8 +272,9 @@ class _CriticalAlertCardState extends State<CriticalAlertCard>
                                   topAlert.title,
                                   style: const TextStyle(
                                     fontSize: 16,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFFDCE2EC),
+                                    letterSpacing: -0.1,
                                     height: 1.2,
                                   ),
                                 ),
@@ -281,9 +282,9 @@ class _CriticalAlertCardState extends State<CriticalAlertCard>
                                 // Message
                                 Text(
                                   topAlert.message,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.white.withOpacity(0.55),
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    color: Color(0xFF8E9BAE),
                                     height: 1.4,
                                   ),
                                 ),
