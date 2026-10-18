@@ -16,7 +16,16 @@ class WarningWidget extends StatelessWidget {
             const Icon(Icons.warning_amber_rounded,
                 color: Color(0xFFFF6577), size: 18),
             const SizedBox(width: 8),
-            Text(message),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                  color: Color(0xFFFF6577),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
           ],
         ),
       );

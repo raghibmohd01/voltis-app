@@ -190,8 +190,23 @@ class DatabaseService {
     return result.map((row) => AlertEvent.fromMap(row)).toList();
   }
 
+  Future<void> deleteAlert(int id) async {
+    final db = await database;
+    await db.delete('alerts', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<void> clearAlertHistory() async {
     final db = await database;
     await db.delete('alerts');
+  }
+
+  /// Cleans up invalid/false positive PV alerts from the database
+  Future<void> deleteFalsePositivePvAlerts() async {
+    final db = await database;
+    await db.delete(
+      'alerts',
+      where: 'type = ? OR title LIKE ?',
+      whereArgs: [AlertType.pv.index, '%Solar Switch%'],
+    );
   }
 }

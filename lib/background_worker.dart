@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 import 'notification_service.dart';
 import 'models/telemetry.dart';
 import 'config.dart';
+import 'utils/solar_timing_helper.dart';
 
 const _endpoint = telemetryEndpoint;
 
@@ -21,6 +22,8 @@ const _idBattery45 = 102;
 const _idLoad50 = 200;
 const _idLoad60 = 201;
 const _idLoad80 = 202;
+const _idSolarSwitchOff = 300;
+const _idSolarNoPower = 301;
 
 Future<void> initializeBackgroundService() async {
   final service = FlutterBackgroundService();
@@ -213,6 +216,45 @@ Future<void> _checkAndNotify(ServiceInstance service) async {
     }
     if (loadPercentage < 45) {
       await NotificationService.clearFlag('load50');
+    }
+
+    // ── Solar Daytime thresholds (requires 30 min of continuous ~0V during sunlight) ──
+    final isDaytime = SolarTimingHelper.isDaytimeSolarHours();
+    final timingRange = SolarTimingHelper.getDaytimeRange();
+
+    if (isDaytime && telemetry.inverterConnected) {
+      final bool hasNoSolar = telemetry.pvVoltage < 20.0 || (telemetry.pvPower <= 1.0 && telemetry.pvVoltage < 30.0);
+      if (hasNoSolar) {
+        final zeroStart = prefs.getInt('solar_zero_start_time') ?? 0;
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        if (zeroStart == 0) {
+          await prefs.setInt('solar_zero_start_time', nowMs);
+        } else {
+          final minutesZero = (nowMs - zeroStart) ~/ 60000;
+          if (minutesZero >= 30) {
+            if (await NotificationService.shouldNotify('solar_switch_off')) {
+              await svc.show(
+                id: _idSolarSwitchOff,
+                title: '☀️ Solar Switch May Be OFF!',
+                body: 'No solar power detected for over 30 minutes during sunlight (${timingRange.label}). Did you forget to turn on the solar switch?',
+                critical: true,
+              );
+              await NotificationService.markSent('solar_switch_off');
+            }
+          }
+        }
+      } else {
+        await prefs.remove('solar_zero_start_time');
+      }
+    } else {
+      await prefs.remove('solar_zero_start_time');
+    }
+
+    // Recovery for Solar (clears when out of daytime or when PV voltage recovers)
+    if (!isDaytime || (telemetry.pvVoltage >= 25.0 && telemetry.pvPower > 10.0)) {
+      await prefs.remove('solar_zero_start_time');
+      await NotificationService.clearFlag('solar_switch_off');
+      await NotificationService.clearFlag('solar_no_power');
     }
   } catch (_) {
     // Network unavailable — silently skip this cycle.

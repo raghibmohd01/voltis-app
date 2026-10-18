@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
 import '../models/telemetry.dart';
 import '../models/alert_event.dart';
+import '../utils/solar_timing_helper.dart';
+import '../notification_service.dart';
 import 'database_service.dart';
 
 /// Evaluates real-time telemetry against thresholds and emits [AlertEvent]s.
@@ -34,6 +36,7 @@ class AlertService {
 
   double? _lastAcInputVoltage;
   DateTime? _offlineSince;
+  DateTime? _pvZeroSince; // Tracks when PV first dropped to ~0V during daytime
 
   // Audio player for tick sound
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -140,7 +143,79 @@ class AlertService {
       }
     }
 
-    // Grid and PV alert generation disabled due to off-grid setup (acIn always 0, pv drops are normal)
+    // ── PV / Solar Daytime thresholds ─────────────────────────────────
+    // Grid alerts remain disabled for off-grid setup, but PV is monitored during core daylight hours
+    // to alert the user if the physical solar switch/breaker was left OFF for 30+ minutes.
+    final bool isOnline = telemetry.inverterConnected && telemetry.status.toLowerCase() == 'online';
+    final bool isDaytime = SolarTimingHelper.isDaytimeSolarHours();
+    final timingRange = SolarTimingHelper.getDaytimeRange();
+
+    AlertSeverity? pvSev;
+    String pvTitle = '';
+    String pvMsg = '';
+
+    if (isOnline && isDaytime) {
+      final bool hasNoSolar = telemetry.pvVoltage < 20.0 || (telemetry.pvPower <= 1.0 && telemetry.pvVoltage < 30.0);
+      if (hasNoSolar) {
+        _pvZeroSince ??= DateTime.now();
+        // Check value for 30 minutes: only trigger if PV stays near 0 continuously for 30+ minutes during sunlight
+        final zeroDuration = DateTime.now().difference(_pvZeroSince!);
+        if (zeroDuration.inMinutes >= 30) {
+          pvSev = AlertSeverity.critical;
+          pvTitle = 'Solar Switch May Be OFF';
+          pvMsg = 'No solar power detected for over 30 minutes during sunlight (${timingRange.label}). Check if the solar panel switch or breaker is OFF.';
+        }
+      } else {
+        _pvZeroSince = null;
+      }
+    } else {
+      _pvZeroSince = null;
+    }
+
+    if (pvSev != null && pvSev != _lastPvSeverity) {
+      _lastPvSeverity = pvSev;
+      _activeAlerts.removeWhere((a) => a.type == AlertType.pv);
+
+      final event = AlertEvent(
+        severity: pvSev,
+        type: AlertType.pv,
+        title: pvTitle,
+        message: pvMsg,
+        value: telemetry.pvVoltage,
+        timestamp: DateTime.now(),
+      );
+
+      _activeAlerts.insert(0, event);
+      await DatabaseService.instance.insertAlert(event);
+      _triggerFeedback(pvSev);
+
+      // Trigger local push notification if not already sent
+      if (await NotificationService.shouldNotify('solar_switch_off')) {
+        await NotificationService.instance.show(
+          id: 300,
+          title: '🚨 Solar Switch May Be OFF!',
+          body: pvMsg,
+          critical: true,
+        );
+        await NotificationService.markSent('solar_switch_off');
+      }
+
+      changed = true;
+    }
+
+    // Recovery condition for PV alerts:
+    // When outside core daytime hours, or PV voltage recovers >= 25V with power > 10W
+    if (_lastPvSeverity != null) {
+      final bool recovered = !isDaytime || (telemetry.pvVoltage >= 25.0 && telemetry.pvPower > 10.0);
+      if (recovered) {
+        _lastPvSeverity = null;
+        _pvZeroSince = null;
+        _activeAlerts.removeWhere((a) => a.type == AlertType.pv);
+        await NotificationService.clearFlag('solar_switch_off');
+        await NotificationService.clearFlag('solar_no_power');
+        changed = true;
+      }
+    }
 
     // ── System thresholds (Output Sag / Offline) ──────────────────────
     final acOut = telemetry.acOutputVoltage;
