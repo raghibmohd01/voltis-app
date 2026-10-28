@@ -28,10 +28,10 @@ class _ChargingPowerTileState extends State<ChargingPowerTile>
     super.initState();
     _randomSeed = math.Random().nextInt(10000);
 
-    // Particles flowing left to right
+    // Particles flowing bottom to top (slow, calm pace)
     _flowController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 3500),
+      duration: const Duration(milliseconds: 7500),
     )..repeat();
 
     // Bolt icon breathing glow
@@ -214,8 +214,7 @@ class _FlowParticlesPainter extends CustomPainter {
 
       // Each particle has a different phase offset
       final phaseOffset = random.nextDouble();
-      final speed = 0.6 + random.nextDouble() * 0.4;
-      final particleProgress = ((progress * speed + phaseOffset) % 1.0);
+      final particleProgress = (progress + phaseOffset) % 1.0;
 
       // Y position: flows from bottom to top
       final y = size.height * (1.0 - particleProgress) + 10 - 10 * particleProgress;

@@ -16,7 +16,6 @@ import 'database_service.dart';
 /// Deduplication: only fires a new alert when the severity *level* changes or
 /// after the condition has fully cleared (with per-level hysteresis).
 class AlertService {
-  AlertService._();
   static final instance = AlertService._();
 
   final StreamController<List<AlertEvent>> _activeController =
@@ -37,9 +36,38 @@ class AlertService {
   double? _lastAcInputVoltage;
   DateTime? _offlineSince;
   DateTime? _pvZeroSince; // Tracks when PV first dropped to ~0V during daytime
+  double? _lastObservedLoad; // Tracks load growth while user is in the app
+  DateTime? _lastSurgeFeedbackTime;
 
   // Audio player for tick sound
   final AudioPlayer _audioPlayer = AudioPlayer();
+
+  AlertService._() {
+    _initAudioPlayer();
+  }
+
+  void _initAudioPlayer() {
+    try {
+      _audioPlayer.setPlayerMode(PlayerMode.lowLatency);
+      _audioPlayer.setAudioContext(AudioContext(
+        android: const AudioContextAndroid(
+          isSpeakerphoneOn: false,
+          stayAwake: false,
+          contentType: AndroidContentType.sonification,
+          usageType: AndroidUsageType.assistanceSonification,
+          audioFocus: AndroidAudioFocus.none,
+        ),
+        iOS: AudioContextIOS(
+          category: AVAudioSessionCategory.ambient,
+          options: const {
+            AVAudioSessionOptions.mixWithOthers,
+          },
+        ),
+      ));
+    } catch (_) {
+      // Ignore if audio context configuration is unsupported
+    }
+  }
 
   /// Call this with every new telemetry reading.
   Future<void> evaluate(Telemetry telemetry) async {
@@ -52,9 +80,9 @@ class AlertService {
 
     if (load >= 105) {
       loadSev = AlertSeverity.critical;
-    } else if (load >= 95) {
+    } else if (load >= 90) {
       loadSev = AlertSeverity.alert;
-    } else if (load >= 85) {
+    } else if (load >= 75) {
       loadSev = AlertSeverity.warning;
     }
 
@@ -75,19 +103,32 @@ class AlertService {
       await DatabaseService.instance.insertAlert(event);
       _triggerFeedback(loadSev);
       changed = true;
+    } else if (_lastObservedLoad != null && load > _lastObservedLoad!) {
+      // Detect noticeable load growth / surges while user is in the app
+      final double loadDiff = load - _lastObservedLoad!;
+      final bool isSurge = (load >= 70.0 && _lastObservedLoad! < 70.0) ||
+                           (loadDiff >= 15.0 && load >= 50.0);
+      if (isSurge) {
+        final now = DateTime.now();
+        if (_lastSurgeFeedbackTime == null || now.difference(_lastSurgeFeedbackTime!).inSeconds >= 5) {
+          _lastSurgeFeedbackTime = now;
+          _triggerFeedback(AlertSeverity.warning);
+        }
+      }
     }
+    _lastObservedLoad = load;
 
     // Per-level hysteresis for load
     if (_lastLoadSeverity != null) {
-      if (_lastLoadSeverity == AlertSeverity.warning && load < 80) {
+      if (_lastLoadSeverity == AlertSeverity.warning && load < 70) {
         _lastLoadSeverity = null;
         _activeAlerts.removeWhere((a) => a.type == AlertType.load);
         changed = true;
-      } else if (_lastLoadSeverity == AlertSeverity.alert && load < 90) {
+      } else if (_lastLoadSeverity == AlertSeverity.alert && load < 85) {
         _lastLoadSeverity = null;
         _activeAlerts.removeWhere((a) => a.type == AlertType.load);
         changed = true;
-      } else if (_lastLoadSeverity == AlertSeverity.critical && load < 100) {
+      } else if (_lastLoadSeverity == AlertSeverity.critical && load < 98) {
         _lastLoadSeverity = null;
         _activeAlerts.removeWhere((a) => a.type == AlertType.load);
         changed = true;
@@ -286,15 +327,22 @@ class AlertService {
         break;
       case AlertSeverity.warning:
         HapticFeedback.lightImpact();
+        _playTickSound();
         break;
     }
   }
 
   Future<void> _playTickSound() async {
     try {
+      // Immediate tactile click via system sound
+      SystemSound.play(SystemSoundType.click);
+
+      // Play subtle metallic compass tick sound
+      await _audioPlayer.stop();
       await _audioPlayer.play(
-        AssetSource('sounds/alert_tick.wav'),
-        volume: 0.7,
+        AssetSource('sounds/metallic_tick.wav'),
+        volume: 1.0,
+        mode: PlayerMode.lowLatency,
       );
     } catch (_) {
       // Sound not available — ignore gracefully

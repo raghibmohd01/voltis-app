@@ -30,10 +30,10 @@ class _SolarPowerFlowTileState extends State<SolarPowerFlowTile>
   void initState() {
     super.initState();
 
-    // Flowing particles along the paths and ripples
+    // Flowing particles along the paths and ripples (slow, graceful pace)
     _flowController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2000),
+      duration: const Duration(milliseconds: 5500),
     )..repeat();
 
     // Slow, continuous rotation for the sun

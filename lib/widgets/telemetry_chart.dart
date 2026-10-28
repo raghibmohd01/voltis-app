@@ -3,7 +3,7 @@ import 'package:fl_chart/fl_chart.dart';
 import '../utils/formatters.dart';
 import '../utils/color_helpers.dart';
 
-class TelemetryChart extends StatelessWidget {
+class TelemetryChart extends StatefulWidget {
   final List<Map<String, dynamic>> data;
   final String title;
   final String metricKey;
@@ -25,15 +25,59 @@ class TelemetryChart extends StatelessWidget {
     this.unit,
   });
 
+  @override
+  State<TelemetryChart> createState() => _TelemetryChartState();
+}
+
+class _TelemetryChartState extends State<TelemetryChart> {
+  bool _daylightOnly = true;
+
   String _formatValue(double val) {
-    if (metricKey == 'pvPower') {
+    if (widget.metricKey == 'pvPower') {
       return formatPower(val);
-    } else if (metricKey == 'batteryVoltage') {
+    } else if (widget.metricKey == 'batteryVoltage') {
       return '${val.toStringAsFixed(1)} V';
-    } else if (metricKey == 'loadPercentage') {
+    } else if (widget.metricKey == 'loadPercentage') {
       return '${val.toStringAsFixed(1)}%';
     }
-    return '${val.toStringAsFixed(1)}${unit != null ? ' $unit' : ''}';
+    return '${val.toStringAsFixed(1)}${widget.unit != null ? ' ${widget.unit}' : ''}';
+  }
+
+  List<Map<String, dynamic>> _getEffectiveData() {
+    if (widget.metricKey != 'pvPower' || widget.isDaily || !_daylightOnly || widget.data.isEmpty) {
+      return widget.data;
+    }
+
+    final raw = widget.data;
+    int firstActive = -1;
+    int lastActive = -1;
+
+    for (int i = 0; i < raw.length; i++) {
+      final p = (raw[i]['pvPower'] as num?)?.toDouble() ?? 0.0;
+      if (p > 5.0) {
+        if (firstActive == -1) firstActive = i;
+        lastActive = i;
+      }
+    }
+
+    // If no solar power detected yet today, keep full data
+    if (firstActive == -1) {
+      return raw;
+    }
+
+    // Include 2 zero-padding points before first solar generation so the curve starts gracefully at 0
+    final startIdx = (firstActive - 2).clamp(0, raw.length - 1);
+
+    // If solar has set for the night, include 2 zero-padding points after dusk
+    int endIdx = raw.length - 1;
+    if (lastActive < raw.length - 3) {
+      endIdx = (lastActive + 2).clamp(0, raw.length - 1);
+    }
+
+    if (startIdx < endIdx) {
+      return raw.sublist(startIdx, endIdx + 1);
+    }
+    return raw;
   }
 
   Widget _buildStatTile({
@@ -94,7 +138,9 @@ class TelemetryChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (data.isEmpty) {
+    final effectiveData = _getEffectiveData();
+
+    if (effectiveData.isEmpty) {
       return Container(
         height: 200,
         alignment: Alignment.center,
@@ -102,9 +148,9 @@ class TelemetryChart extends StatelessWidget {
       );
     }
 
-    final spots = data.map((entry) {
+    final spots = effectiveData.map((entry) {
       final timestamp = entry['timestamp'] as int;
-      final value = (entry[metricKey] as num).toDouble();
+      final value = (entry[widget.metricKey] as num).toDouble();
       return FlSpot(timestamp.toDouble(), value);
     }).toList();
 
@@ -114,7 +160,7 @@ class TelemetryChart extends StatelessWidget {
 
     final values = spots.map((s) => s.y).toList();
     final nonZeroValues = values.where((v) => v > 0).toList();
-    final statValues = (metricKey == 'batteryVoltage' && nonZeroValues.isNotEmpty)
+    final statValues = (widget.metricKey == 'batteryVoltage' && nonZeroValues.isNotEmpty)
         ? nonZeroValues
         : values;
 
@@ -125,13 +171,13 @@ class TelemetryChart extends StatelessWidget {
     double finalMinY = 0;
     double finalMaxY = 100;
 
-    if (metricKey == 'batteryVoltage') {
+    if (widget.metricKey == 'batteryVoltage') {
       finalMinY = actualMin < 45.0 ? actualMin : 45.0;
       finalMaxY = actualMax > 55.0 ? actualMax : 55.0;
-    } else if (metricKey == 'loadPercentage') {
+    } else if (widget.metricKey == 'loadPercentage') {
       finalMinY = actualMin < 5.0 ? actualMin : 5.0;
       finalMaxY = actualMax > 70.0 ? actualMax : 70.0;
-    } else if (metricKey == 'pvPower') {
+    } else if (widget.metricKey == 'pvPower') {
       finalMinY = 0;
       finalMaxY = actualMax > 3900.0 ? actualMax : 3900.0;
     }
@@ -142,15 +188,15 @@ class TelemetryChart extends StatelessWidget {
     Color avgColor = const Color(0xFF5B9DFF);
     Color minColor = const Color(0xFFF39C12);
 
-    if (metricKey == 'loadPercentage') {
+    if (widget.metricKey == 'loadPercentage') {
       maxColor = getLoadColor(actualMax);
       avgColor = const Color(0xFF5B9DFF);
       minColor = getLoadColor(actualMin);
-    } else if (metricKey == 'batteryVoltage') {
+    } else if (widget.metricKey == 'batteryVoltage') {
       maxColor = getBatteryColor(actualMax);
       avgColor = const Color(0xFF5B9DFF);
       minColor = getBatteryColor(actualMin);
-    } else if (metricKey == 'pvPower') {
+    } else if (widget.metricKey == 'pvPower') {
       maxColor = actualMax >= 1500 ? const Color(0xFF2ECC71) : const Color(0xFF55D6BE);
       avgColor = const Color(0xFF55D6BE);
       minColor = const Color(0xFFF39C12);
@@ -159,7 +205,47 @@ class TelemetryChart extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(color: Color(0xFFDCE2EC), fontWeight: FontWeight.w600, fontSize: 13.5)),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(widget.title, style: const TextStyle(color: Color(0xFFDCE2EC), fontWeight: FontWeight.w600, fontSize: 13.5)),
+            if (widget.metricKey == 'pvPower' && !widget.isDaily && widget.data.isNotEmpty)
+              GestureDetector(
+                onTap: () => setState(() => _daylightOnly = !_daylightOnly),
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _daylightOnly ? const Color(0xFF55D6BE).withValues(alpha: 0.15) : Colors.white10,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _daylightOnly ? const Color(0xFF55D6BE).withValues(alpha: 0.4) : Colors.white24,
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _daylightOnly ? Icons.wb_sunny_rounded : Icons.nights_stay_rounded,
+                        size: 13,
+                        color: _daylightOnly ? const Color(0xFF55D6BE) : Colors.white70,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _daylightOnly ? 'Daylight' : '24h',
+                        style: TextStyle(
+                          color: _daylightOnly ? const Color(0xFF55D6BE) : Colors.white70,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
         const SizedBox(height: 16),
         SizedBox(
           height: 180,
@@ -171,7 +257,7 @@ class TelemetryChart extends StatelessWidget {
                   getTooltipItems: (List<LineBarSpot> touchedSpots) {
                     return touchedSpots.map((LineBarSpot touchedSpot) {
                       final date = DateTime.fromMillisecondsSinceEpoch(touchedSpot.x.toInt());
-                      final formattedDate = isDaily 
+                      final formattedDate = widget.isDaily 
                           ? '${date.month}/${date.day}'
                           : '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
                       return LineTooltipItem(
@@ -204,7 +290,7 @@ class TelemetryChart extends StatelessWidget {
                     getTitlesWidget: (value, meta) {
                       if (value == minX || value == maxX) return const SizedBox();
                       final date = DateTime.fromMillisecondsSinceEpoch(value.toInt());
-                      final formattedDate = isDaily 
+                      final formattedDate = widget.isDaily 
                           ? '${date.month}/${date.day}'
                           : '${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
                       return Padding(
@@ -240,20 +326,20 @@ class TelemetryChart extends StatelessWidget {
                 LineChartBarData(
                   spots: spots,
                   isCurved: true,
-                  color: gradient == null ? color : null,
-                  gradient: gradient,
+                  color: widget.gradient == null ? widget.color : null,
+                  gradient: widget.gradient,
                   barWidth: 2,
                   isStrokeCapRound: true,
                   dotData: const FlDotData(show: false),
                   belowBarData: BarAreaData(
-                    show: isArea,
-                    color: gradient == null ? color.withValues(alpha: 0.2) : null,
-                    gradient: gradient != null 
+                    show: widget.isArea,
+                    color: widget.gradient == null ? widget.color.withValues(alpha: 0.2) : null,
+                    gradient: widget.gradient != null 
                         ? LinearGradient(
-                            colors: gradient!.colors.map((c) => c.withValues(alpha: 0.2)).toList(),
-                            stops: gradient!.stops,
-                            begin: gradient!.begin,
-                            end: gradient!.end,
+                            colors: widget.gradient!.colors.map((c) => c.withValues(alpha: 0.2)).toList(),
+                            stops: widget.gradient!.stops,
+                            begin: widget.gradient!.begin,
+                            end: widget.gradient!.end,
                           ) 
                         : null,
                   ),

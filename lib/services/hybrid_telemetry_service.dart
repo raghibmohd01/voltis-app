@@ -113,7 +113,7 @@ class HybridTelemetryService {
     _dataSourceController.add(DataSource.local);
   }
 
-  Future<List<Map<String, dynamic>>> getFirebaseHistoryForDay(int day) async {
+  Future<List<Map<String, dynamic>>> getFirebaseHistoryForDay(int day, {DateTime? targetDate}) async {
     try {
       final snapshot = await _database.ref('/telemetry/history/day_$day').get();
       
@@ -121,6 +121,27 @@ class HybridTelemetryService {
         final data = snapshot.value as Map<dynamic, dynamic>;
         
         final List<Map<String, dynamic>> history = [];
+
+        DateTime effectiveDate;
+        if (targetDate != null) {
+          effectiveDate = targetDate;
+        } else {
+          final now = DateTime.now();
+          int targetMonth = now.month;
+          int targetYear = now.year;
+          if (day > now.day) {
+            targetMonth--;
+            if (targetMonth < 1) {
+              targetMonth = 12;
+              targetYear--;
+            }
+          }
+          effectiveDate = DateTime(targetYear, targetMonth, day);
+        }
+
+        final startMs = DateTime(effectiveDate.year, effectiveDate.month, effectiveDate.day, 0, 0, 0).millisecondsSinceEpoch;
+        final endMs = DateTime(effectiveDate.year, effectiveDate.month, effectiveDate.day, 23, 59, 59, 999).millisecondsSinceEpoch;
+
         data.forEach((key, value) {
           if (value == null) return;
           final entry = Map<String, dynamic>.from(value as Map<dynamic, dynamic>);
@@ -128,8 +149,13 @@ class HybridTelemetryService {
           if (entry['timestamp'] != null) {
             // ESP32 sends timestamp in seconds, convert to milliseconds
             final int tsInSeconds = (entry['timestamp'] as num).toInt();
-            entry['timestamp'] = tsInSeconds * 1000;
-            history.add(entry);
+            final int tsMs = tsInSeconds * 1000;
+            
+            // Only keep entries belonging to this exact calendar day!
+            if (tsMs >= startMs && tsMs <= endMs) {
+              entry['timestamp'] = tsMs;
+              history.add(entry);
+            }
           }
         });
         

@@ -26,7 +26,7 @@ class _BatteryDrainTileState extends State<BatteryDrainTile>
     _randomSeed = math.Random().nextInt(10000);
     _flowController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 4000),
+      duration: const Duration(milliseconds: 8000), // Slow, smooth draining pace
     )..repeat();
   }
 
@@ -198,8 +198,7 @@ class _DrainParticlesPainter extends CustomPainter {
       final startX = size.width * (0.05 + random.nextDouble() * 0.90);
 
       final phaseOffset = random.nextDouble();
-      final speed = 0.6 + random.nextDouble() * 0.4;
-      final particleProgress = ((progress * speed + phaseOffset) % 1.0);
+      final particleProgress = (progress + phaseOffset) % 1.0;
 
       // Y position: flows from top to bottom (draining)
       final y = size.height * particleProgress - 10;
