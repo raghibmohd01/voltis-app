@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/telemetry.dart';
 import '../models/alert_event.dart';
 import '../utils/solar_timing_helper.dart';
@@ -38,12 +39,34 @@ class AlertService {
   DateTime? _pvZeroSince; // Tracks when PV first dropped to ~0V during daytime
   double? _lastObservedLoad; // Tracks load growth while user is in the app
   DateTime? _lastSurgeFeedbackTime;
+  DateTime? _voltageUnstableSince;
+  DateTime? _loadOverloadSince;
 
   // Audio player for tick sound
   final AudioPlayer _audioPlayer = AudioPlayer();
+  Timer? _continuousTickTimer;
+  AlertSeverity? _currentTickerSeverity;
+  bool _tickSoundEnabled = true;
+
+  bool get tickSoundEnabled => _tickSoundEnabled;
+
+  void setTickSoundEnabled(bool enabled) {
+    _tickSoundEnabled = enabled;
+    if (!enabled) {
+      _audioPlayer.stop();
+    }
+  }
+
+  Future<void> initPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _tickSoundEnabled = prefs.getBool('alert_tick_sound_enabled') ?? true;
+    } catch (_) {}
+  }
 
   AlertService._() {
     _initAudioPlayer();
+    initPrefs();
   }
 
   void _initAudioPlayer() {
@@ -75,15 +98,25 @@ class AlertService {
 
     // ── Load thresholds ──────────────────────────────────────────────
     // Eastman Smart Max 5KVA: 110% overload for 60s, 150% for 30s
+    // Debounced with 3-second persistence to eliminate 1-sample transient spikes
     final load = telemetry.loadPercentage;
     AlertSeverity? loadSev;
 
     if (load >= 105) {
-      loadSev = AlertSeverity.critical;
+      _loadOverloadSince ??= DateTime.now();
+      if (DateTime.now().difference(_loadOverloadSince!).inSeconds >= 3) {
+        loadSev = AlertSeverity.critical;
+      }
     } else if (load >= 90) {
-      loadSev = AlertSeverity.alert;
+      _loadOverloadSince ??= DateTime.now();
+      if (DateTime.now().difference(_loadOverloadSince!).inSeconds >= 3) {
+        loadSev = AlertSeverity.alert;
+      }
     } else if (load >= 75) {
+      _loadOverloadSince = null;
       loadSev = AlertSeverity.warning;
+    } else {
+      _loadOverloadSince = null;
     }
 
     if (loadSev != null && loadSev != _lastLoadSeverity) {
@@ -273,11 +306,18 @@ class AlertService {
       }
     } else {
       _offlineSince = null;
-      // Check voltage sag/surge if inverter is running
-      if (acOut > 0 && (acOut < 200 || acOut > 250)) {
-        sysSev = AlertSeverity.warning;
-        sysTitle = 'Output Voltage Unstable';
-        sysMsg = 'AC output is ${acOut.toStringAsFixed(0)}V, which is outside safe limits.';
+      // Check voltage sag/surge only when inverter AC output is in operational range (>= 150V)
+      // Readings below 150V indicate inverter standby/off or invalid serial glitches
+      if (acOut >= 150.0 && (acOut < 200.0 || acOut > 255.0)) {
+        _voltageUnstableSince ??= DateTime.now();
+        // Require voltage instability to persist for at least 4 seconds
+        if (DateTime.now().difference(_voltageUnstableSince!).inSeconds >= 4) {
+          sysSev = AlertSeverity.warning;
+          sysTitle = 'Output Voltage Unstable';
+          sysMsg = 'AC output is ${acOut.toStringAsFixed(0)}V, which is outside safe limits.';
+        }
+      } else {
+        _voltageUnstableSince = null;
       }
     }
 
@@ -307,19 +347,79 @@ class AlertService {
     if (changed) {
       _activeController.add(List.unmodifiable(_activeAlerts));
     }
+
+    // Continuously tick based on highest active alert severity
+    _updateContinuousTicker();
   }
 
-  // ── Haptic + Sound ───────────────────────────────────────────────
-  void _triggerFeedback(AlertSeverity severity) {
+  // ── Continuous Severity-Based Alert Ticker ────────────────────────
+  void _updateContinuousTicker() {
+    AlertSeverity? highest;
+    for (final a in _activeAlerts) {
+      if (a.severity == AlertSeverity.critical) {
+        highest = AlertSeverity.critical;
+        break; // Critical is the highest priority
+      } else if (a.severity == AlertSeverity.alert) {
+        highest = AlertSeverity.alert;
+      } else if (highest == null && a.severity == AlertSeverity.warning) {
+        highest = AlertSeverity.warning;
+      }
+    }
+
+    if (highest == null) {
+      _stopContinuousTicker();
+      return;
+    }
+
+    // If already ticking with this exact severity level, keep the rhythm
+    if (_continuousTickTimer != null && _currentTickerSeverity == highest) {
+      return;
+    }
+
+    _currentTickerSeverity = highest;
+    _continuousTickTimer?.cancel();
+
+    // Speed scales dynamically with severity:
+    // Critical (Overload/Shutdown timer) -> ~650ms urgent heartbeat
+    // Alert (High load / deep discharge) -> ~1500ms steady warning
+    // Warning (75% load / 25% battery)   -> ~3500ms periodic advisory
+    Duration interval;
+    switch (highest) {
+      case AlertSeverity.critical:
+        interval = const Duration(milliseconds: 650);
+        break;
+      case AlertSeverity.alert:
+        interval = const Duration(milliseconds: 1500);
+        break;
+      case AlertSeverity.warning:
+        interval = const Duration(milliseconds: 3500);
+        break;
+    }
+
+    // Fire immediately upon entering or escalating severity
+    _tickForSeverity(highest);
+
+    // Repeat continuously as long as the alert condition persists
+    _continuousTickTimer = Timer.periodic(interval, (_) {
+      if (_activeAlerts.isEmpty) {
+        _stopContinuousTicker();
+      } else {
+        _tickForSeverity(_currentTickerSeverity ?? AlertSeverity.warning);
+      }
+    });
+  }
+
+  void _stopContinuousTicker() {
+    _continuousTickTimer?.cancel();
+    _continuousTickTimer = null;
+    _currentTickerSeverity = null;
+  }
+
+  void _tickForSeverity(AlertSeverity severity) {
     switch (severity) {
       case AlertSeverity.critical:
         HapticFeedback.heavyImpact();
         _playTickSound();
-        // Double tap for critical
-        Future.delayed(const Duration(milliseconds: 150), () {
-          HapticFeedback.heavyImpact();
-          _playTickSound();
-        });
         break;
       case AlertSeverity.alert:
         HapticFeedback.mediumImpact();
@@ -332,7 +432,13 @@ class AlertService {
     }
   }
 
+  // ── Haptic + Sound ───────────────────────────────────────────────
+  void _triggerFeedback(AlertSeverity severity) {
+    _tickForSeverity(severity);
+  }
+
   Future<void> _playTickSound() async {
+    if (!_tickSoundEnabled) return;
     try {
       // Immediate tactile click via system sound
       SystemSound.play(SystemSoundType.click);

@@ -68,8 +68,13 @@ class _StatisticsViewState extends State<StatisticsView> {
       final battery = (point['batteryVoltage'] as num?)?.toDouble() ?? 0.0;
       final energy = (point['pvEnergy'] as num?)?.toDouble() ?? 0.0;
       
-      if (load > maxLoad) maxLoad = load;
-      if (solar > maxSolar) maxSolar = solar;
+      // Filter out physical impossibilities (corrupted frames from boot/noise)
+      if (load > 0 && load <= 150.0) {
+        if (load > maxLoad) maxLoad = load;
+      }
+      if (solar > 0 && solar <= 8500.0) {
+        if (solar > maxSolar) maxSolar = solar;
+      }
       if (battery > 0 && battery < minBattery) minBattery = battery;
       
       if (energy > 0 && energy < minEnergy) minEnergy = energy;
@@ -115,8 +120,8 @@ class _StatisticsViewState extends State<StatisticsView> {
             final l = (pt['loadPercentage'] as num?)?.toDouble() ?? 0;
             final s = (pt['pvPower'] as num?)?.toDouble() ?? 0;
             final b = (pt['batteryVoltage'] as num?)?.toDouble() ?? 0;
-            if (l > dMaxLoad) dMaxLoad = l;
-            if (s > dMaxSolar) dMaxSolar = s;
+            if (l > 0 && l <= 150.0 && l > dMaxLoad) dMaxLoad = l;
+            if (s > 0 && s <= 8500.0 && s > dMaxSolar) dMaxSolar = s;
             if (b > 0 && b < dMinBattery) dMinBattery = b;
           }
           if (dMinBattery == 999) dMinBattery = 0;

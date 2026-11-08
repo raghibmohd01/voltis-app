@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/alert_event.dart';
+import '../services/alert_service.dart';
 import '../services/database_service.dart';
 import '../services/hybrid_telemetry_service.dart';
 import '../utils/solar_timing_helper.dart';
@@ -27,6 +28,7 @@ class _AlertsViewState extends State<AlertsView>
 
   bool _bgServiceEnabled = false;
   bool _notificationsEnabled = true;
+  bool _tickSoundEnabled = true;
   bool _settingsExpanded = false;
 
   // Track which alert IDs are expanded for detail view
@@ -53,6 +55,7 @@ class _AlertsViewState extends State<AlertsView>
       setState(() {
         _bgServiceEnabled = prefs.getBool('bg_service_enabled') ?? false;
         _notificationsEnabled = prefs.getBool('notifications_enabled') ?? true;
+        _tickSoundEnabled = prefs.getBool('alert_tick_sound_enabled') ?? true;
       });
     }
   }
@@ -77,6 +80,15 @@ class _AlertsViewState extends State<AlertsView>
     await prefs.setBool('notifications_enabled', value);
     setState(() {
       _notificationsEnabled = value;
+    });
+  }
+
+  Future<void> _toggleTickSound(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('alert_tick_sound_enabled', value);
+    AlertService.instance.setTickSoundEnabled(value);
+    setState(() {
+      _tickSoundEnabled = value;
     });
   }
 
@@ -759,6 +771,8 @@ class _AlertsViewState extends State<AlertsView>
                         _buildStatusDot(_bgServiceEnabled, 'BG'),
                         const SizedBox(width: 6),
                         _buildStatusDot(_notificationsEnabled, 'Notif'),
+                        const SizedBox(width: 6),
+                        _buildStatusDot(_tickSoundEnabled, 'Sound'),
                       ],
                     ),
                     const SizedBox(width: 8),
@@ -796,6 +810,15 @@ class _AlertsViewState extends State<AlertsView>
                   subtitle: 'Get alerted for critical issues',
                   value: _notificationsEnabled,
                   onChanged: _toggleNotifications,
+                ),
+                Divider(height: 1, indent: 62, color: Colors.white.withOpacity(0.04)),
+                _buildToggleRow(
+                  icon: Icons.volume_up_rounded,
+                  iconColor: const Color(0xFF55D6BE),
+                  title: 'Metallic Tick Sound',
+                  subtitle: 'Urgent rhythmic audio on critical alerts',
+                  value: _tickSoundEnabled,
+                  onChanged: _toggleTickSound,
                 ),
                 const SizedBox(height: 4),
               ],

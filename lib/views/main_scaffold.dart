@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'dashboard_view.dart';
+import 'controls_view.dart';
 import 'statistics_view.dart';
 import 'alerts_view.dart';
 import '../services/alert_service.dart';
@@ -22,6 +23,7 @@ class _MainScaffoldState extends State<MainScaffold>
 
   final List<Widget> _pages = [
     const DashboardView(),
+    const ControlsView(),
     const StatisticsView(),
     const AlertsView(),
   ];
@@ -87,9 +89,10 @@ class _MainScaffoldState extends State<MainScaffold>
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
                       _buildNavItem(0, Icons.dashboard_rounded, 'Dashboard'),
-                      _buildNavItem(1, Icons.bar_chart_rounded, 'Statistics'),
+                      _buildNavItem(1, Icons.tune_rounded, 'Controls'),
+                      _buildNavItem(2, Icons.bar_chart_rounded, 'Statistics'),
                       _buildNavItem(
-                          2, Icons.notifications_rounded, 'Alerts',
+                          3, Icons.notifications_rounded, 'Alerts',
                           badgeCount: _alertBadgeCount),
                     ],
                   ),
@@ -114,12 +117,12 @@ class _MainScaffoldState extends State<MainScaffold>
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOutCirc,
         padding: EdgeInsets.symmetric(
-          horizontal: isSelected ? 24 : 16, 
-          vertical: 12,
+          horizontal: isSelected ? 16 : 10, 
+          vertical: 10,
         ),
         decoration: BoxDecoration(
           color: isSelected ? color.withOpacity(0.12) : Colors.transparent,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(20),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
