@@ -675,7 +675,7 @@ class _ControlsViewState extends State<ControlsView>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Socket 1: Geyser',
+                      'Socket 1 • Geyser',
                       style: TextStyle(
                         fontSize: 15.5,
                         fontWeight: FontWeight.w700,
@@ -685,7 +685,7 @@ class _ControlsViewState extends State<ControlsView>
                     ),
                     SizedBox(height: 1),
                     Text(
-                      '30A Relay (CH1) • 2000W Heating',
+                      'Water Heater',
                       style: TextStyle(
                         color: Color(0xFF8E9BAE),
                         fontSize: 11,
@@ -699,13 +699,13 @@ class _ControlsViewState extends State<ControlsView>
           ),
           const SizedBox(height: 12),
 
-          // ── Hero Section: Large Circular Button & Clean Metric Tiles ──
+          // ── Hero Section: Power Toggle & Clean State ──
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.22),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.035)),
+              color: Colors.black.withOpacity(0.20),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white.withOpacity(0.04)),
             ),
             child: Row(
               children: [
@@ -714,38 +714,67 @@ class _ControlsViewState extends State<ControlsView>
                   isOn: isOn,
                   isAuto: isAuto,
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 18),
                 Expanded(
-                  child: _buildTelemetryPanel(
-                    rows: [
-                      _TelemetryRowData(
-                        icon: Icons.bolt_rounded,
-                        iconColor: isOn ? accentColor : const Color(0xFF64748B),
-                        label: 'HEATER DRAW',
-                        value: isOn ? '2.0 kW' : '0 W',
-                        valueColor: isOn ? accentColor : const Color(0xFF8E9BAE),
-                        badge: isOn ? 'ACTIVE' : 'IDLE',
-                        badgeColor: isOn ? accentColor : const Color(0xFF64748B),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.bolt_rounded,
+                            size: 13,
+                            color: isOn ? const Color(0xFF2ECC71) : const Color(0xFF64748B),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            isOn ? 'HEATING POWER' : 'POWER DRAW',
+                            style: const TextStyle(
+                              color: Color(0xFF8E9BAE),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ],
                       ),
+                      const SizedBox(height: 3),
+                      Text(
+                        isOn ? '2.0 kW' : '0 W',
+                        style: TextStyle(
+                          color: isOn ? const Color(0xFF2ECC71) : const Color(0xFFDCE2EC),
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.4,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
                       if (s1.cooldownRemainingSec > 0)
-                        _TelemetryRowData(
-                          icon: Icons.hourglass_top_rounded,
-                          iconColor: const Color(0xFFFFB020),
-                          label: 'COOLDOWN',
-                          value: '${s1.cooldownRemainingSec}s',
-                          valueColor: const Color(0xFFFFB020),
-                          badge: 'HOLD',
-                          badgeColor: const Color(0xFFFFB020),
+                        Row(
+                          children: [
+                            const Icon(Icons.hourglass_top_rounded, size: 12, color: Color(0xFFFFB020)),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Cooldown: ${s1.cooldownRemainingSec}s',
+                              style: const TextStyle(
+                                color: Color(0xFFFFB020),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         )
                       else
-                        _TelemetryRowData(
-                          icon: Icons.electric_bolt_rounded,
-                          iconColor: isOn ? accentColor : const Color(0xFF64748B),
-                          label: 'CURRENT DRAW',
-                          value: isOn ? '8.7 A' : '0.0 A',
-                          valueColor: isOn ? const Color(0xFFDCE2EC) : const Color(0xFF8E9BAE),
-                          badge: isOn ? '230V' : 'STANDBY',
-                          badgeColor: isOn ? accentColor : const Color(0xFF64748B),
+                        Text(
+                          isOn
+                              ? 'Active heating load (~8.7A)'
+                              : (isAuto ? 'Ready for solar heating' : 'Manual Standby'),
+                          style: const TextStyle(
+                            color: Color(0xFF64748B),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                     ],
                   ),
@@ -909,7 +938,7 @@ class _ControlsViewState extends State<ControlsView>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Socket 2: Outdoor Light',
+                      'Socket 2 • Outdoor Light',
                       style: TextStyle(
                         fontSize: 15.5,
                         fontWeight: FontWeight.w700,
@@ -919,7 +948,7 @@ class _ControlsViewState extends State<ControlsView>
                     ),
                     SizedBox(height: 1),
                     Text(
-                      '30A Relay (CH2) • 230V Lighting',
+                      'Sunset Schedule',
                       style: TextStyle(
                         color: Color(0xFF8E9BAE),
                         fontSize: 11,
@@ -933,13 +962,13 @@ class _ControlsViewState extends State<ControlsView>
           ),
           const SizedBox(height: 12),
 
-          // ── Hero Section: Large Circular Button & Clean Metric Tiles ──
+          // ── Hero Section: Power Toggle & Schedule State ──
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.22),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.035)),
+              color: Colors.black.withOpacity(0.20),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white.withOpacity(0.04)),
             ),
             child: Row(
               children: [
@@ -948,27 +977,51 @@ class _ControlsViewState extends State<ControlsView>
                   isOn: isOn,
                   isAuto: isAuto,
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 18),
                 Expanded(
-                  child: _buildTelemetryPanel(
-                    rows: [
-                      _TelemetryRowData(
-                        icon: Icons.lightbulb_outline_rounded,
-                        iconColor: isOn ? accentColor : const Color(0xFF64748B),
-                        label: 'LIGHT OUTPUT',
-                        value: isOn ? '230 V' : '0 V',
-                        valueColor: isOn ? accentColor : const Color(0xFF8E9BAE),
-                        badge: isOn ? 'ON' : 'OFF',
-                        badgeColor: isOn ? accentColor : const Color(0xFF64748B),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(
+                            Icons.wb_twilight_rounded,
+                            size: 14,
+                            color: Color(0xFFFFB020),
+                          ),
+                          SizedBox(width: 5),
+                          Text(
+                            'SCHEDULE',
+                            style: TextStyle(
+                              color: Color(0xFF8E9BAE),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ],
                       ),
-                      _TelemetryRowData(
-                        icon: Icons.schedule_rounded,
-                        iconColor: accentColor,
-                        label: 'ACTIVE HOURS',
-                        value: 'Sunset → 22:00',
-                        valueColor: const Color(0xFFDCE2EC),
-                        badge: 'RTC',
-                        badgeColor: accentColor,
+                      const SizedBox(height: 3),
+                      const Text(
+                        'Sunset → 22:00',
+                        style: TextStyle(
+                          color: Color(0xFFDCE2EC),
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        isOn
+                            ? (isAuto ? '● Active until 22:00' : '● Manually switched ON')
+                            : (isAuto ? 'Turns on at Sunset (~18:15)' : 'Standby (Schedule off)'),
+                        style: TextStyle(
+                          color: isOn ? const Color(0xFF2ECC71) : const Color(0xFF64748B),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ],
                   ),
@@ -985,143 +1038,6 @@ class _ControlsViewState extends State<ControlsView>
             onAutoTap: () => _handleModeChange(2, 'AUTO', isOn),
             autoLabel: 'Schedule',
           ),
-
-          // Single Clean Schedule Intelligence Bar (Eliminates redundant banners)
-          if (isAuto) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.20),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.03)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: accentColor.withOpacity(0.12),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.wb_twilight_rounded, size: 14, color: accentColor),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          s2.reason.isEmpty ? 'Sunset Schedule Active' : s2.reason,
-                          style: const TextStyle(
-                            color: Color(0xFFDCE2EC),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        Text(
-                          'Turns off at ${cfg.s2OffHour}:00 IST via local RTC',
-                          style: const TextStyle(
-                            color: Color(0xFF64748B),
-                            fontSize: 10.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // ── Unified Telemetry Panel (High-Impact Minimalist Numerical View) ─
-  Widget _buildTelemetryPanel({
-    required List<_TelemetryRowData> rows,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.04)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (int i = 0; i < rows.length; i++) ...[
-            if (i > 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Divider(
-                  height: 1,
-                  thickness: 1,
-                  color: Colors.white.withOpacity(0.04),
-                ),
-              ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      rows[i].icon,
-                      size: 11,
-                      color: rows[i].iconColor ?? const Color(0xFF64748B),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      rows[i].label,
-                      style: const TextStyle(
-                        color: Color(0xFF8E9BAE),
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.4,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Text(
-                      rows[i].value,
-                      style: TextStyle(
-                        color: rows[i].valueColor,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                    if (rows[i].badge != null) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 4.5, vertical: 1.5),
-                        decoration: BoxDecoration(
-                          color: rows[i].badgeColor!.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          rows[i].badge!,
-                          style: TextStyle(
-                            color: rows[i].badgeColor,
-                            fontSize: 8,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ],
         ],
       ),
     );
@@ -1576,24 +1492,4 @@ class _TransitionRingPainter extends CustomPainter {
   @override
   bool shouldRepaint(_TransitionRingPainter oldDelegate) =>
       oldDelegate.progress != progress || oldDelegate.color != color;
-}
-
-class _TelemetryRowData {
-  final IconData icon;
-  final Color? iconColor;
-  final String label;
-  final String value;
-  final Color valueColor;
-  final String? badge;
-  final Color? badgeColor;
-
-  const _TelemetryRowData({
-    required this.icon,
-    this.iconColor,
-    required this.label,
-    required this.value,
-    required this.valueColor,
-    this.badge,
-    this.badgeColor,
-  });
 }
