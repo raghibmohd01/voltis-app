@@ -26,6 +26,7 @@ class HybridTelemetryService {
 
   Stream<Telemetry> get telemetryStream => _telemetryController.stream;
   Stream<DataSource> get dataSourceStream => _dataSourceController.stream;
+  bool get isUsingFirebase => _isUsingFirebase;
 
   Future<User?> signInWithEmail(String email, String password) async {
     try {

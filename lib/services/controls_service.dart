@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:firebase_database/firebase_database.dart';
 import '../models/controls_state.dart';
 import '../config.dart';
+import 'hybrid_telemetry_service.dart';
 
 class ControlsService {
   static final ControlsService instance = ControlsService._internal();
@@ -29,7 +30,7 @@ class ControlsService {
 
   void start() {
     _subscribeRtdb();
-    // Also poll local HTTP periodically for instant LAN synchronization
+    // Only poll local HTTP periodically if connected to home Wi-Fi
     _localPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
       _pollLocal();
     });
@@ -42,7 +43,7 @@ class ControlsService {
 
   void _subscribeRtdb() {
     _rtdbSubscription =
-        _database.ref('/controls/state').onValue.listen((event) {
+        _database.ref('/telemetry/controls/state').onValue.listen((event) {
       if (event.snapshot.value != null) {
         try {
           final data = event.snapshot.value as Map<dynamic, dynamic>;
@@ -50,19 +51,21 @@ class ControlsService {
           _latestState = parsed;
           _controlsController.add(parsed);
         } catch (e) {
-          debugPrint('Error parsing /controls/state from Firebase: $e');
+          debugPrint('Error parsing /telemetry/controls/state from Firebase: $e');
         }
       }
     }, onError: (err) {
-      debugPrint('Firebase /controls/state stream error: $err');
+      debugPrint('Firebase /telemetry/controls/state stream error: $err');
     });
   }
 
   Future<void> _pollLocal() async {
+    // When away from home on mobile data, don't waste battery/traffic probing LAN
+    if (HybridTelemetryService.instance.isUsingFirebase) return;
     try {
       final res = await http
           .get(Uri.parse(_localControlsUrl))
-          .timeout(const Duration(seconds: 2));
+          .timeout(const Duration(milliseconds: 700));
       if (res.statusCode == 200) {
         final data = json.decode(res.body) as Map<dynamic, dynamic>;
         final parsed = ControlsState.fromJson(data);
@@ -81,33 +84,37 @@ class ControlsService {
     required bool state,
   }) async {
     bool localSuccess = false;
+    final isUsingFirebase = HybridTelemetryService.instance.isUsingFirebase;
 
-    // 1. Try local HTTP for immediate sub-10ms response if on home Wi-Fi
-    try {
-      final res = await http
-          .post(
-            Uri.parse(_localControlsUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode({
-              'socket': socket,
-              'mode': mode,
-              'state': state,
-            }),
-          )
-          .timeout(const Duration(seconds: 2));
-      if (res.statusCode == 200) {
-        localSuccess = true;
-        final data = json.decode(res.body) as Map<dynamic, dynamic>;
-        _latestState = ControlsState.fromJson(data);
-        _controlsController.add(_latestState);
+    // 1. Try local HTTP for immediate sub-10ms response ONLY if on home Wi-Fi
+    if (!isUsingFirebase) {
+      try {
+        final res = await http
+            .post(
+              Uri.parse(_localControlsUrl),
+              headers: {'Content-Type': 'application/json'},
+              body: json.encode({
+                'socket': socket,
+                'mode': mode,
+                'state': state,
+              }),
+            )
+            .timeout(const Duration(milliseconds: 700));
+        if (res.statusCode == 200) {
+          localSuccess = true;
+          final data = json.decode(res.body) as Map<dynamic, dynamic>;
+          _latestState = ControlsState.fromJson(data);
+          _controlsController.add(_latestState);
+        }
+      } catch (_) {
+        localSuccess = false;
       }
-    } catch (_) {
-      localSuccess = false;
     }
 
     // 2. Always publish command to Firebase RTDB so state is synced globally
+    // Zero increase in read/writes: exactly 1 write per user button tap
     try {
-      await _database.ref('/controls/commands').set({
+      await _database.ref('/telemetry/controls/commands').set({
         'socket': socket,
         'mode': mode,
         'state': state,
@@ -125,29 +132,32 @@ class ControlsService {
   Future<bool> updateConfig(ControlsConfig config) async {
     bool localSuccess = false;
     final bodyJson = {'config': config.toJson()};
+    final isUsingFirebase = HybridTelemetryService.instance.isUsingFirebase;
 
-    // 1. Try local HTTP
-    try {
-      final res = await http
-          .post(
-            Uri.parse(_localControlsUrl),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode(bodyJson),
-          )
-          .timeout(const Duration(seconds: 2));
-      if (res.statusCode == 200) {
-        localSuccess = true;
-        final data = json.decode(res.body) as Map<dynamic, dynamic>;
-        _latestState = ControlsState.fromJson(data);
-        _controlsController.add(_latestState);
+    // 1. Try local HTTP ONLY if on home Wi-Fi
+    if (!isUsingFirebase) {
+      try {
+        final res = await http
+            .post(
+              Uri.parse(_localControlsUrl),
+              headers: {'Content-Type': 'application/json'},
+              body: json.encode(bodyJson),
+            )
+            .timeout(const Duration(milliseconds: 700));
+        if (res.statusCode == 200) {
+          localSuccess = true;
+          final data = json.decode(res.body) as Map<dynamic, dynamic>;
+          _latestState = ControlsState.fromJson(data);
+          _controlsController.add(_latestState);
+        }
+      } catch (_) {
+        localSuccess = false;
       }
-    } catch (_) {
-      localSuccess = false;
     }
 
-    // 2. Firebase RTDB
+    // 2. Firebase RTDB: exactly 1 write only when user edits thresholds
     try {
-      await _database.ref('/controls/config').set(config.toJson());
+      await _database.ref('/telemetry/controls/config').set(config.toJson());
       return true;
     } catch (e) {
       debugPrint('Failed to set config in Firebase: $e');
